@@ -51,6 +51,18 @@ enum class MessageLabelPlacement(val value: String) {
     BELOW("below"),
 }
 
+/**
+ * Controls the text direction of the chat interface.
+ */
+enum class TextDirection(val value: String) {
+    /** Left-to-right layout (default). */
+    LTR("ltr"),
+    /** Right-to-left layout, for languages like Arabic and Hebrew. */
+    RTL("rtl"),
+    /** Automatically configured from the conversation locale. */
+    AUTO("auto"),
+}
+
 /** Options for configuring an agent chat controller. */
 @Parcelize
 data class AgentChatControllerOptions(
@@ -88,6 +100,12 @@ data class AgentChatControllerOptions(
     var errorMessage: String = "Oops, an error was encountered! Please try again.",
 
     /**
+     * Message shown when a conversation was ended due to inactivity.
+     * Overridden by server-configured inactivity message if useConfiguredChatStrings is true.
+     */
+    var inactivityMessage: String? = null,
+
+    /**
      * Placeholder value displayed in the chat input when it is empty.
      * Overridden by server-configured input placeholder if useConfiguredChatStrings is true.
      * Defaults to "Message…" when this value is empty.
@@ -106,6 +124,20 @@ data class AgentChatControllerOptions(
      * Overridden by server-configured waiting message if useConfiguredChatStrings is true.
      */
     var agentTransferWaitingMessage: String = "Waiting for agent…",
+
+    /**
+     * Message shown when waiting for a human agent to join the conversation, and the queue
+     * size is known. "{QUEUE_SIZE}" will be replaced with the size of the queue. Overridden by
+     * server-configured queue size message if useConfiguredChatStrings is true.
+     */
+    var agentTransferQueueSizeMessage: String = "Queue Size: {QUEUE_SIZE}",
+
+    /**
+     * Message shown when waiting for a human agent to join the conversation, and the user is
+     * next in line. Overridden by server-configured queue next message if
+     * useConfiguredChatStrings is true.
+     */
+    var agentTransferQueueNextMessage: String = "You are next in line",
 
     /**
      * Message shown when a human agent has joined the conversation.
@@ -130,6 +162,14 @@ data class AgentChatControllerOptions(
      * responsible for showing a title/app bar with the agent name.
      */
     val hideTitleBar: Boolean = false,
+
+    /**
+     * A signed JWT that identifies the end user for this session. When set, the token is
+     * forwarded to the server on every chat request for identity resolution. The server
+     * extracts the `sub` claim and resolves a persistent EndUser, enabling cross-session
+     * memory and conversation history. Must be an RS256-signed JWT with `aud: "sierra.ai"`.
+     */
+    val userIdentityToken: String? = null,
 
     /** Customization of the Conversation that the controller will create. */
     var conversationOptions: ConversationOptions? = null,
@@ -185,7 +225,26 @@ data class AgentChatControllerOptions(
      * above or below chat message bubbles. When DEFAULT and useConfiguredStyle
      * is true, the server-configured value is used.
      */
-    var messageLabelPlacement: MessageLabelPlacement = MessageLabelPlacement.DEFAULT
+    var messageLabelPlacement: MessageLabelPlacement = MessageLabelPlacement.DEFAULT,
+
+    /**
+     * Explicitly set the text direction of the chat window.
+     * - `LTR`: Forces the chat window to use a left-to-right language layout.
+     * - `RTL`: Forces the chat window to use a right-to-left language layout.
+     * - `AUTO`: Text direction is automatically configured from the conversation locale.
+     * When null and useConfiguredStyle is true, the server-configured value is used.
+     * Otherwise defaults to left-to-right.
+     */
+    var textDirection: TextDirection? = null,
+
+    /** Menu label for the conversation transcript saving item. */
+    var saveTranscriptLabel: String = "Save Transcript",
+
+    /** Menu label for the conversation ending item. */
+    var endConversationLabel: String = "End Conversation",
+
+    /** Label for the new chat button. */
+    var newChatButtonLabel: String = "Start new chat"
 
 ) : Parcelable {
     @IgnoredOnParcel
@@ -234,6 +293,7 @@ class AgentChatFragment : Fragment() {
     private lateinit var webView: WebView
     internal var listener: ConversationEventListener? = null
     internal var controller: AgentChatController? = null
+    private var storage: ConversationStorage? = null
 
     /**
      * Flag used to keep track that of whether the web view successfully loaded or not. We only
@@ -296,6 +356,23 @@ class AgentChatFragment : Fragment() {
             controller = viewModel.controller
         }
         controller?.connectToFragment(this)
+
+        // Resolve storage: prefer Agent's storage, fall back to creating one from the
+        // parceled config. This handles process death where the ViewModel (and thus the
+        // Agent) is gone but the Fragment arguments survive.
+        storage = controller?.agent?.getStorage()
+        if (storage == null) {
+            val args = arguments?.getParcelable<AgentChatFragmentArgs>("args")
+            if (args != null && args.agentConfig.persistence != PersistenceMode.NONE) {
+                storage = ConversationStorage(
+                    mode = args.agentConfig.persistence,
+                    storageKey = ConversationStorage.storageKeyForToken(args.agentConfig.token),
+                    context = if (args.agentConfig.persistence == PersistenceMode.DISK)
+                        requireContext().applicationContext else null
+                )
+                Log.i(TAG, "Created fallback storage after process death (mode=${args.agentConfig.persistence})")
+            }
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -357,7 +434,7 @@ class AgentChatFragment : Fragment() {
                 }
             }
             addJavascriptInterface(
-                ChatWebViewInterface(requireContext(), controller?.agent, listener, this),
+                ChatWebViewInterface(requireContext(), storage, listener, this),
                 "AndroidSDK"
             )
         }
@@ -413,7 +490,10 @@ class AgentChatFragment : Fragment() {
             "botName" to options.name,
             "greetingMessage" to options.greetingMessage,
             "errorMessage" to options.errorMessage,
+            "inactivityMessage" to (options.inactivityMessage ?: ""),
             "agentTransferWaitingMessage" to options.agentTransferWaitingMessage,
+            "agentTransferQueueSizeMessage" to options.agentTransferQueueSizeMessage,
+            "agentTransferQueueNextMessage" to options.agentTransferQueueNextMessage,
             "agentJoinedMessage" to options.agentJoinedMessage,
             "agentLeftMessage" to options.agentLeftMessage,
             "chatStyle" to JSONObject(options.chatStyle.toJSON()).toString(),
@@ -431,6 +511,9 @@ class AgentChatFragment : Fragment() {
                 "inputPlaceholder" to options.inputPlaceholder,
                 "disclosure" to (options.disclosure ?: ""),
                 "conversationEndedMessage" to options.conversationEndedMessage,
+                "newChatButtonLabel" to options.newChatButtonLabel,
+                "printTranscriptMenuLabel" to options.saveTranscriptLabel,
+                "endConversationMenuLabel" to options.endConversationLabel,
             )
         ).toString()
         urlBuilder.appendQueryParameter("chatInterfaceStrings", chatInterfaceStrings)
@@ -484,6 +567,12 @@ class AgentChatFragment : Fragment() {
         if (options.useConfiguredStyle) {
             urlBuilder.appendQueryParameter("useConfiguredStyle", "true")
         }
+        options.textDirection?.let {
+            urlBuilder.appendQueryParameter("textDirection", it.value)
+        }
+        if (!options.userIdentityToken.isNullOrEmpty()) {
+            urlBuilder.appendQueryParameter("userIdentityToken", options.userIdentityToken)
+        }
 
         val url = urlBuilder.build().toString()
         webView.loadUrl(url)
@@ -492,7 +581,6 @@ class AgentChatFragment : Fragment() {
     private fun restoreStorage(savedInstanceState: Bundle) {
         val savedStorage = savedInstanceState.getSerializable("storage") as? HashMap<String, String>
         if (savedStorage != null) {
-            val storage = controller?.agent?.getStorage()
             savedStorage.forEach { (key, value) ->
                 storage?.setItem(key, value)
             }
@@ -508,9 +596,9 @@ class AgentChatFragment : Fragment() {
         if (args != null) {
             outState.putParcelable("args", args)
         }
-        val storage = controller?.agent?.getStorage()?.getAll()
-        if (storage != null) {
-            outState.putSerializable("storage", HashMap(storage))
+        val storageData = storage?.getAll()
+        if (storageData != null) {
+            outState.putSerializable("storage", HashMap(storageData))
         }
     }
 
@@ -604,7 +692,7 @@ private class ChatWebViewClient(
 
 private class ChatWebViewInterface(
     private val context: Context,
-    private val agent: Agent?,
+    private val storage: ConversationStorage?,
     private val listener: ConversationEventListener?,
     private val webView: WebView
 ) {
@@ -691,17 +779,17 @@ private class ChatWebViewInterface(
 
     @JavascriptInterface
     fun storeValue(key: String, value: String) {
-        agent?.getStorage()?.setItem(key, value)
+        storage?.setItem(key, value)
     }
 
     @JavascriptInterface
     fun getStoredValue(key: String): String? {
-        return agent?.getStorage()?.getItem(key)
+        return storage?.getItem(key)
     }
 
     @JavascriptInterface
     fun clearStorage() {
-        agent?.getStorage()?.clear()
+        storage?.clear()
     }
 
     @JavascriptInterface

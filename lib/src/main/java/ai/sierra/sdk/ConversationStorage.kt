@@ -69,4 +69,8 @@ class ConversationStorage internal constructor(
      * @return A copy of all stored key-value pairs
      */
     fun getAll(): Map<String, String> = cache.toMap()
+
+    companion object {
+        internal fun storageKeyForToken(token: String) = "sierra_chat_$token"
+    }
 }

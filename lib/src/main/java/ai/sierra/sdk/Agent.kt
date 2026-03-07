@@ -55,7 +55,7 @@ class Agent(
 
     private val storage: ConversationStorage = ConversationStorage(
         mode = config.persistence,
-        storageKey = "sierra_chat_${config.token}",
+        storageKey = ConversationStorage.storageKeyForToken(config.token),
         context = context?.applicationContext
     )
 
@@ -66,5 +66,19 @@ class Agent(
      */
     fun resetConversation() {
         storage.clear()
+    }
+
+    companion object {
+        /**
+         * Clears any stored conversation state for the given token without requiring an Agent instance.
+         * Useful for clearing DISK-mode storage before the Agent is created (e.g., on logout).
+         *
+         * @param token The agent token whose conversation state should be cleared.
+         * @param context Application context used to access SharedPreferences.
+         */
+        fun resetConversation(token: String, context: Context) {
+            val key = ConversationStorage.storageKeyForToken(token)
+            context.getSharedPreferences(key, Context.MODE_PRIVATE).edit().clear().apply()
+        }
     }
 }
