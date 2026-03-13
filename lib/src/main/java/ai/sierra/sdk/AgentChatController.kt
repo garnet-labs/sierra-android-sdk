@@ -171,6 +171,12 @@ data class AgentChatControllerOptions(
      */
     val userIdentityToken: String? = null,
 
+    /** Whether to show the conversation list UI. Requires userIdentityToken. */
+    val enableConversationList: Boolean = false,
+
+    /** Whether to show the conversation list by default when the chat opens. */
+    val showConversationListByDefault: Boolean = false,
+
     /** Customization of the Conversation that the controller will create. */
     var conversationOptions: ConversationOptions? = null,
 
@@ -178,7 +184,12 @@ data class AgentChatControllerOptions(
     var canPrintTranscript: Boolean = false,
     /** Allow the user to manually end a conversation via a UI */
     var canEndConversation: Boolean = false,
-    /** Allow the user to start a new conversation via a UI */
+    /**
+     * If true, a "new chat" button is shown on the conversation view after the conversation
+     * has ended. Only effective when [canEndConversation] is true. When the conversation list
+     * is enabled, the list view always includes its own button to start a new chat regardless
+     * of this setting.
+     */
     var canStartNewChat: Boolean = false,
 
     /**
@@ -280,6 +291,10 @@ class AgentChatController(
 
     fun endConversation() {
         this.connectedFragment?.endConversation()
+    }
+
+    fun showConversationList() {
+        this.connectedFragment?.showConversationList()
     }
 }
 
@@ -573,6 +588,12 @@ class AgentChatFragment : Fragment() {
         if (!options.userIdentityToken.isNullOrEmpty()) {
             urlBuilder.appendQueryParameter("userIdentityToken", options.userIdentityToken)
         }
+        if (options.enableConversationList) {
+            urlBuilder.appendQueryParameter("enableConversationList", "true")
+        }
+        if (options.showConversationListByDefault) {
+            urlBuilder.appendQueryParameter("showConversationListByDefault", "true")
+        }
 
         val url = urlBuilder.build().toString()
         webView.loadUrl(url)
@@ -608,6 +629,10 @@ class AgentChatFragment : Fragment() {
 
     fun endConversation() {
         webView.evaluateJavascript("sierraAndroid.endConversation()", null)
+    }
+
+    fun showConversationList() {
+        webView.evaluateJavascript("sierraAndroid.showConversationList()", null)
     }
 }
 
@@ -775,6 +800,16 @@ private class ChatWebViewInterface(
     @JavascriptInterface
     fun onEndChat() {
         listener?.onConversationEnded()
+    }
+
+    @JavascriptInterface
+    fun onShowConversationList() {
+        listener?.onShowConversationList()
+    }
+
+    @JavascriptInterface
+    fun onHideConversationList() {
+        listener?.onHideConversationList()
     }
 
     @JavascriptInterface

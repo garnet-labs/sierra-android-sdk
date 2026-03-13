@@ -85,6 +85,16 @@ interface ConversationEventListener {
     fun onSecretExpiry(secretName: String, replyHandler: (SecretExpiryResult) -> Unit) {
         replyHandler(SecretExpiryResult.Success(null))
     }
+
+    /**
+     * Callback invoked when the conversation list is shown.
+     */
+    fun onShowConversationList() {}
+
+    /**
+     * Callback invoked when the conversation list is hidden (a conversation is opened or started).
+     */
+    fun onHideConversationList() {}
 }
 
 /**
@@ -131,6 +141,18 @@ internal class MainThreadConversationEventListener(private val listener: Convers
             } else {
                 replyHandler(SecretExpiryResult.Success(null))
             }
+        }
+    }
+
+    override fun onShowConversationList() {
+        handler.post {
+            listener?.onShowConversationList()
+        }
+    }
+
+    override fun onHideConversationList() {
+        handler.post {
+            listener?.onHideConversationList()
         }
     }
 }
