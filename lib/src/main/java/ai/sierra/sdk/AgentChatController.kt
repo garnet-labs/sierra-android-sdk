@@ -417,7 +417,7 @@ class AgentChatFragment : Fragment() {
 
         val agentConfig = args.agentConfig
         val chatWebViewClient =
-            ChatWebViewClient(this, agentConfig, requireContext(), args.options, listener)
+            ChatWebViewClient(this, agentConfig, listener)
         webView.apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -654,8 +654,6 @@ internal class AgentChatViewModel : ViewModel() {
 private class ChatWebViewClient(
     private val fragment: AgentChatFragment,
     private val agentConfig: AgentConfig,
-    private val context: Context,
-    private val options: AgentChatControllerOptions,
     private val listener: ConversationEventListener?,
 ) : WebViewClient() {
     private var hadError: Boolean = false
@@ -668,11 +666,11 @@ private class ChatWebViewClient(
 
     @SuppressLint("WebViewClientOnReceivedSslError")
     override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-        // Ignore SSL errors for the local development certificate.
-        if (agentConfig.apiHost == AgentAPIHost.LOCAL && error?.url?.startsWith(agentConfig.url) == true) {
-            Log.w(TAG, "Ignoring SSL error for local URL ${error.url}")
-            handler?.proceed()
+        if (listener != null) {
+            Log.w(TAG, "Delegating SSL error handling to conversation listener for URL ${error?.url}")
+            listener.onReceivedSslError(view, handler, error)
         } else {
+            Log.w(TAG, "Cancelling SSL error for URL ${error?.url}")
             handler?.cancel()
         }
     }

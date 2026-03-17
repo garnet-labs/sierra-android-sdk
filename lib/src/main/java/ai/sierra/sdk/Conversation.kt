@@ -2,9 +2,12 @@
 
 package ai.sierra.sdk
 
+import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcelable
+import android.webkit.SslErrorHandler
+import android.webkit.WebView
 import kotlinx.parcelize.Parcelize
 import java.util.Locale
 
@@ -95,6 +98,20 @@ interface ConversationEventListener {
      * Callback invoked when the conversation list is hidden (a conversation is opened or started).
      */
     fun onHideConversationList() {}
+
+    /**
+     * Callback invoked on the main thread when the embedded WebView receives an SSL error.
+     *
+     * The default implementation cancels the request and should be sufficient for all normal and
+     * production uses of the SDK.
+     *
+     * Overrides and any non-default behavior should be considered only in controlled testing
+     * situations, such as local development against a test certificate. Production applications
+     * should continue using the default behavior.
+     */
+    fun onReceivedSslError(view: WebView?, sslErrorHandler: SslErrorHandler?, error: SslError?) {
+        sslErrorHandler?.cancel()
+    }
 }
 
 /**
@@ -153,6 +170,22 @@ internal class MainThreadConversationEventListener(private val listener: Convers
     override fun onHideConversationList() {
         handler.post {
             listener?.onHideConversationList()
+        }
+    }
+
+    override fun onReceivedSslError(view: WebView?, sslErrorHandler: SslErrorHandler?, error: SslError?) {
+        val listener = listener ?: run {
+            sslErrorHandler?.cancel()
+            return
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            listener.onReceivedSslError(view, sslErrorHandler, error)
+            return
+        }
+
+        this.handler.post {
+            listener.onReceivedSslError(view, sslErrorHandler, error)
         }
     }
 }
