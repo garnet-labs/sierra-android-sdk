@@ -19,9 +19,12 @@ data class AgentConfig(
     val token: String,
     val target: String? = null,
     var apiHost: AgentAPIHost = AgentAPIHost.PROD,
-    val persistence: PersistenceMode = PersistenceMode.MEMORY
+    val persistence: PersistenceMode = PersistenceMode.MEMORY,
+    /** Headless API token required for SVP voice connections. Not needed for chat. */
+    val headlessAPIToken: String? = null
 ): Parcelable {
-    internal val url get() = "https://${apiHost.hostname}/agent/${token}/mobile"
+    internal val url get() = "${apiHost.embedBaseURL}/agent/${token}/mobile"
+    internal val conversationRendererURL get() = "${apiHost.embedBaseURL}/agent/${token}/mobile-renderer"
 }
 
 enum class AgentAPIHost(val hostname: String, val displayName: String) {
@@ -29,7 +32,31 @@ enum class AgentAPIHost(val hostname: String, val displayName: String) {
     EU("eu.sierra.chat", "EU"),
     SG("sg.sierra.chat", "SG"),
     STAGING("staging.sierra.chat", "Staging"),
-    LOCAL("chat.sierra.codes:8083", "Local")
+    LOCAL("chat.sierra.codes:8083", "Local");
+
+    internal val apiBaseURL: String
+        get() = when (this) {
+            PROD -> "https://api.sierra.chat"
+            EU -> "https://eu.api.sierra.chat"
+            SG -> "https://sg.api.sierra.chat"
+            STAGING -> "https://api-staging.sierra.chat"
+            LOCAL -> "https://api.sierra.codes:8083"
+        }
+
+    internal val voiceBaseURL: String
+        get() = when (this) {
+            LOCAL -> "https://sierra.codes:8084"
+            else -> apiBaseURL
+        }
+
+    internal val embedBaseURL: String
+        get() = when (this) {
+            PROD -> "https://sierra.chat"
+            EU -> "https://eu.sierra.chat"
+            SG -> "https://sg.sierra.chat"
+            STAGING -> "https://staging.sierra.chat"
+            LOCAL -> "https://chat.sierra.codes:8083"
+        }
 }
 
 /**

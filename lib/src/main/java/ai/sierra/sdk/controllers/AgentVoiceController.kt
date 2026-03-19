@@ -1,0 +1,745 @@
+// Copyright Sierra
+
+package ai.sierra.sdk
+
+import android.Manifest
+import android.animation.ObjectAnimator
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.content.res.Resources
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.Parcelable
+import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.appcompat.widget.Toolbar
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import kotlinx.parcelize.IgnoredOnParcel
+import kotlinx.parcelize.Parcelize
+import org.json.JSONArray
+import org.json.JSONObject
+
+@RequiresOptIn(
+    message = "This voice API is experimental and may change without notice.",
+    level = RequiresOptIn.Level.ERROR
+)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY)
+public annotation class ExperimentalVoiceApi
+
+@ExperimentalVoiceApi
+public interface VoiceCallbacks {
+    public fun onVoiceEnded()
+    public fun onVoiceError(error: Throwable)
+}
+
+@Parcelize
+@ExperimentalVoiceApi
+public data class AgentVoiceStyle(
+    val backgroundColor: Int = Color.WHITE,
+    val titleBarColor: Int = Color.WHITE,
+    val titleBarTextColor: Int = Color.BLACK,
+    val controlsColor: Int = Color.parseColor("#12304C"),
+    val rendererBackgroundColor: Int? = null
+) : Parcelable
+
+@Parcelize
+@ExperimentalVoiceApi
+public data class AgentVoiceControllerOptions(
+    val name: String,
+    var titleBarMessage: String? = null,
+    var voiceStyle: AgentVoiceStyle = AgentVoiceStyle(),
+    var voicePlaceholderText: String = "How can I help you today?",
+    var voiceAgentParameters: HashMap<String, String>? = null,
+    var disableInterruptions: Boolean = false,
+    var allowInsecureLocalConnections: Boolean = false
+) : Parcelable {
+    @Deprecated("Use voiceAgentParameters instead.")
+    @IgnoredOnParcel
+    public var voiceAgentSecrets: HashMap<String, String>?
+        get() = voiceAgentParameters
+        set(value) {
+            voiceAgentParameters = value
+        }
+}
+
+@ExperimentalVoiceApi
+public class AgentVoiceController(
+    internal val agent: Agent,
+    internal val options: AgentVoiceControllerOptions = AgentVoiceControllerOptions(name = "Voice Agent")
+) {
+    private var connectedFragment: AgentVoiceFragment? = null
+    public var conversationEventListener: ConversationEventListener? = null
+
+    @Deprecated("Use AgentVoiceControllerOptions.disableInterruptions.")
+    public var disableInterruptions: Boolean
+        get() = options.disableInterruptions
+        set(value) {
+            options.disableInterruptions = value
+            connectedFragment?.setDisableInterruptions(value)
+        }
+
+    public constructor(agent: Agent, options: AgentChatControllerOptions) : this(
+        agent = agent,
+        options = AgentVoiceControllerOptions(
+            name = options.name,
+            titleBarMessage = options.name,
+            voiceStyle = AgentVoiceStyle(
+                backgroundColor = options.chatStyle.colors.background ?: Color.WHITE,
+                titleBarColor = options.chatStyle.colors.titleBar ?: Color.WHITE,
+                titleBarTextColor = options.chatStyle.colors.titleBarText ?: Color.BLACK,
+                controlsColor = options.chatStyle.colors.newChatButton
+                    ?.takeIf { Color.alpha(it) != 0 }
+                    ?: Color.parseColor("#12304C"),
+                rendererBackgroundColor = options.chatStyle.colors.background
+            ),
+            voicePlaceholderText = options.greetingMessage,
+            voiceAgentParameters = options.conversationOptions?.secrets?.let { HashMap(it) }
+        )
+    )
+
+    public fun createFragment(): Fragment {
+        return AgentVoiceFragment().apply {
+            arguments = Bundle().apply {
+                putParcelable("args", AgentVoiceFragmentArgs(agentConfig = agent.config, options = options))
+            }
+            controller = this@AgentVoiceController
+        }
+    }
+
+    internal fun connectToFragment(fragment: AgentVoiceFragment) {
+        connectedFragment = fragment
+    }
+
+    public fun interrupt() {
+        connectedFragment?.interrupt()
+    }
+
+    public fun endConversation() {
+        connectedFragment?.endConversation()
+    }
+}
+
+@Parcelize
+@OptIn(ExperimentalVoiceApi::class)
+private data class AgentVoiceFragmentArgs(
+    val agentConfig: AgentConfig,
+    val options: AgentVoiceControllerOptions
+) : Parcelable
+
+@OptIn(ExperimentalVoiceApi::class)
+internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRendererDelegate {
+    internal var controller: AgentVoiceController? = null
+    public var voiceCallbacks: VoiceCallbacks? = null
+
+    private lateinit var parceledArgs: AgentVoiceFragmentArgs
+    private val agentConfig: AgentConfig
+        get() = controller?.agent?.config ?: parceledArgs.agentConfig
+    private val options: AgentVoiceControllerOptions
+        get() = controller?.options ?: parceledArgs.options
+    private lateinit var rootLayout: LinearLayout
+    private lateinit var contentContainer: FrameLayout
+    private lateinit var placeholderContainer: LinearLayout
+    private lateinit var placeholderIcon: ImageView
+    private lateinit var placeholderLabel: TextView
+    private lateinit var loadingIndicator: ProgressBar
+    private lateinit var errorBanner: TextView
+    private lateinit var muteButton: ImageView
+    private lateinit var endButton: ImageView
+    private val controlButtonSizeDp = 64
+    private val controlIconMaxSizeDp = 32
+    private val controlButtonSpacingDp = 28
+    private val controlsTopPaddingDp = 16
+    private val controlsBottomPaddingDp = 18
+    private val placeholderWaveformBoxSizeDp = 80
+    private val placeholderWaveformIconSizeDp = 40
+
+    private var pulseAnimatorX: ObjectAnimator? = null
+    private var pulseAnimatorY: ObjectAnimator? = null
+    private var rendererView: MobileRendererView? = null
+    private var voiceSession: VoiceSessionManager? = null
+    private var hasShownFirstAttachment = false
+    private var hasReceivedInitialGreeting = false
+    private var hasShutdownVoiceSession = false
+    private var rendererFailed = false
+    private var lastRenderableAttachmentsSignature: String? = null
+    private var isMuted = false
+    private var isDisableInterruptions = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        parceledArgs = arguments?.let {
+            androidx.core.os.BundleCompat.getParcelable(it, "args", AgentVoiceFragmentArgs::class.java)
+        } ?: throw IllegalStateException("AgentVoiceFragment args are required")
+        isDisableInterruptions = options.disableInterruptions
+
+        val viewModel = ViewModelProvider(this)[AgentVoiceViewModel::class.java]
+        if (controller != null) {
+            viewModel.controller = controller
+        } else {
+            controller = viewModel.controller
+        }
+        controller?.connectToFragment(this)
+    }
+
+    override fun onCreateView(
+        inflater: android.view.LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        AppContextHolder.applicationContext = requireContext().applicationContext
+
+        rootLayout = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(options.voiceStyle.backgroundColor)
+        }
+
+        rootLayout.addView(createToolbar())
+        rootLayout.addView(createErrorBanner())
+        rootLayout.addView(createContentContainer(), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        ))
+        rootLayout.addView(createBottomControls())
+
+        showLoadingState(true)
+        return rootLayout
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        if (
+            ContextCompat.checkSelfPermission(
+                requireContext(),
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            onError(IllegalStateException("RECORD_AUDIO permission is required before starting voice"))
+            return
+        }
+        startVoiceSession()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        voiceSession?.resumeListening()
+    }
+
+    override fun onDestroyView() {
+        shutdownVoiceSessionIfNeeded()
+        pulseAnimatorX?.cancel()
+        pulseAnimatorX = null
+        pulseAnimatorY?.cancel()
+        pulseAnimatorY = null
+        rendererView?.destroy()
+        rendererView = null
+        super.onDestroyView()
+    }
+
+    internal fun setDisableInterruptions(disabled: Boolean) {
+        isDisableInterruptions = disabled
+    }
+
+    internal fun interrupt() {
+        voiceSession?.interrupt()
+    }
+
+    internal fun endConversation() {
+        endConversationForExit()
+        dismissVoiceController()
+    }
+
+    private fun endConversationForExit() {
+        if (hasShutdownVoiceSession) {
+            return
+        }
+        shutdownVoiceSessionIfNeeded()
+        voiceCallbacks?.onVoiceEnded()
+    }
+
+    private fun dismissVoiceController() {
+        if (!isAdded) {
+            return
+        }
+        requireActivity().onBackPressedDispatcher.onBackPressed()
+    }
+
+    private fun startVoiceSession() {
+        val agentParameters = options.voiceAgentParameters ?: hashMapOf()
+        hasShutdownVoiceSession = false
+        VoiceSessionService.start(requireContext())
+        voiceSession = VoiceSessionManager(
+            config = agentConfig,
+            disableInterruptions = isDisableInterruptions,
+            agentParameters = agentParameters,
+            allowInsecureLocalConnections = options.allowInsecureLocalConnections,
+            delegate = this
+        ).also { it.connect() }
+        updateUIForState(VoiceSessionManager.State.CONNECTING)
+    }
+
+    private fun shutdownVoiceSessionIfNeeded() {
+        if (hasShutdownVoiceSession) {
+            return
+        }
+        hasShutdownVoiceSession = true
+        voiceSession?.disconnect()
+        voiceSession = null
+        if (isAdded) {
+            VoiceSessionService.stop(requireContext())
+        }
+    }
+
+    private fun createToolbar(): Toolbar {
+        return Toolbar(requireContext()).apply {
+            setBackgroundColor(options.voiceStyle.titleBarColor)
+            setTitleTextColor(options.voiceStyle.titleBarTextColor)
+            title = options.titleBarMessage?.takeIf { it.isNotBlank() } ?: options.name
+            setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material)
+            navigationIcon?.setTint(options.voiceStyle.titleBarTextColor)
+            setNavigationOnClickListener { endConversation() }
+        }
+    }
+
+    private fun createErrorBanner(): TextView {
+        errorBanner = TextView(requireContext()).apply {
+            setBackgroundColor(Color.parseColor("#E94E2A"))
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                40.dp
+            )
+            setPadding(16.dp, 0, 16.dp, 0)
+            visibility = View.GONE
+        }
+        return errorBanner
+    }
+
+    private fun createContentContainer(): FrameLayout {
+        contentContainer = FrameLayout(requireContext())
+        placeholderContainer = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
+
+        loadingIndicator = ProgressBar(requireContext()).apply {
+            visibility = View.VISIBLE
+        }
+        placeholderContainer.addView(loadingIndicator)
+
+        placeholderIcon = ImageView(requireContext()).apply {
+            setImageResource(R.drawable.sierra_ic_waveform_40)
+            scaleType = ImageView.ScaleType.CENTER
+            val inset = ((placeholderWaveformBoxSizeDp - placeholderWaveformIconSizeDp) / 2).dp
+            setPadding(inset, inset, inset, inset)
+            visibility = View.GONE
+        }
+        placeholderContainer.addView(
+            placeholderIcon,
+            LinearLayout.LayoutParams(
+                placeholderWaveformBoxSizeDp.dp,
+                placeholderWaveformBoxSizeDp.dp
+            )
+        )
+
+        placeholderLabel = TextView(requireContext()).apply {
+            text = options.voicePlaceholderText
+            setTextColor(resolvePlaceholderTextColor())
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setPadding(32, 16, 32, 0)
+            visibility = View.GONE
+        }
+        placeholderContainer.addView(placeholderLabel)
+
+        contentContainer.addView(
+            placeholderContainer,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        return contentContainer
+    }
+
+    private fun createBottomControls(): View {
+        val container = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, controlsTopPaddingDp.dp, 0, controlsBottomPaddingDp.dp)
+        }
+        muteButton = createCircleButton(R.drawable.sierra_ic_mic_24).apply {
+            contentDescription = "Mute microphone"
+        }
+        endButton = createCircleButton(R.drawable.sierra_ic_call_end_24).apply {
+            contentDescription = "End conversation"
+        }
+
+        muteButton.setOnClickListener { muteTapped() }
+        endButton.setOnClickListener { endConversation() }
+
+        container.addView(muteButton, LinearLayout.LayoutParams(controlButtonSizeDp.dp, controlButtonSizeDp.dp).apply {
+            marginEnd = controlButtonSpacingDp.dp
+        })
+        container.addView(endButton, LinearLayout.LayoutParams(controlButtonSizeDp.dp, controlButtonSizeDp.dp))
+        return container
+    }
+
+    private fun createCircleButton(iconRes: Int): ImageView {
+        val bg = GradientDrawable()
+        bg.shape = GradientDrawable.OVAL
+        // Some host apps pass transparent color ints unintentionally (e.g. Color(0)).
+        // Fall back to the SDK default so controls remain visible.
+        val controlsColor = options.voiceStyle.controlsColor
+            .takeIf { Color.alpha(it) != 0 }
+            ?: Color.parseColor("#12304C")
+        bg.setColor(controlsColor)
+        return ImageView(requireContext()).apply {
+            setImageResource(iconRes)
+            setColorFilter(Color.WHITE)
+            val iconInset = ((controlButtonSizeDp - controlIconMaxSizeDp) / 2).dp
+            setPadding(iconInset, iconInset, iconInset, iconInset)
+            background = bg
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            isClickable = true
+            isFocusable = true
+            contentDescription = ""
+        }
+    }
+
+    private fun ensureRendererLoaded() {
+        if (rendererView != null) {
+            return
+        }
+        val renderer = MobileRendererView(
+            context = requireContext(),
+            agentConfig = agentConfig,
+            options = options,
+            conversationEventListener = controller?.conversationEventListener,
+            delegate = this
+        )
+        rendererView = renderer
+        renderer.visibility = View.GONE
+        contentContainer.addView(
+            renderer,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+    }
+
+    private fun showLoadingState(visible: Boolean) {
+        loadingIndicator.visibility = if (visible) View.VISIBLE else View.GONE
+        placeholderIcon.visibility = if (visible) View.GONE else View.VISIBLE
+        placeholderLabel.visibility = if (visible) View.GONE else View.VISIBLE
+    }
+
+    private fun markInitialGreetingReceivedIfNeeded() {
+        if (hasReceivedInitialGreeting) {
+            return
+        }
+        hasReceivedInitialGreeting = true
+        showLoadingState(false)
+    }
+
+    private fun startWaveformAnimation() {
+        if (placeholderContainer.visibility != View.VISIBLE) {
+            return
+        }
+        if (pulseAnimatorX == null) {
+            pulseAnimatorX = ObjectAnimator.ofFloat(placeholderIcon, View.SCALE_X, 1f, 1.06f).apply {
+                duration = 900
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+            }
+            pulseAnimatorX?.start()
+            pulseAnimatorY = ObjectAnimator.ofFloat(placeholderIcon, View.SCALE_Y, 1f, 1.06f).apply {
+                duration = 900
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+            }
+            pulseAnimatorY?.start()
+        }
+    }
+
+    private fun stopWaveformAnimation() {
+        pulseAnimatorX?.cancel()
+        pulseAnimatorX = null
+        pulseAnimatorY?.cancel()
+        pulseAnimatorY = null
+        placeholderIcon.scaleX = 1f
+        placeholderIcon.scaleY = 1f
+    }
+
+    private fun updateUIForState(state: VoiceSessionManager.State) {
+        when (state) {
+            VoiceSessionManager.State.CONNECTING -> {
+                muteButton.isEnabled = true
+                muteButton.alpha = 1f
+                endButton.isEnabled = true
+                endButton.alpha = 1f
+                showLoadingState(!hasReceivedInitialGreeting)
+                stopWaveformAnimation()
+            }
+            VoiceSessionManager.State.LISTENING -> {
+                markInitialGreetingReceivedIfNeeded()
+                muteButton.isEnabled = true
+                muteButton.alpha = 1f
+                endButton.isEnabled = true
+                endButton.alpha = 1f
+                stopWaveformAnimation()
+            }
+            VoiceSessionManager.State.SPEAKING -> {
+                markInitialGreetingReceivedIfNeeded()
+                muteButton.isEnabled = true
+                muteButton.alpha = 1f
+                endButton.isEnabled = true
+                endButton.alpha = 1f
+                startWaveformAnimation()
+            }
+            VoiceSessionManager.State.ENDED -> {
+                markInitialGreetingReceivedIfNeeded()
+                stopWaveformAnimation()
+                muteButton.isEnabled = false
+                muteButton.alpha = 0.5f
+                endButton.isEnabled = false
+                endButton.alpha = 0.5f
+            }
+        }
+    }
+
+    private fun showErrorState(message: String) {
+        stopWaveformAnimation()
+        shutdownVoiceSessionIfNeeded()
+        errorBanner.text = message
+        errorBanner.visibility = View.VISIBLE
+
+        if (hasShownFirstAttachment) {
+            rendererView?.visibility = View.VISIBLE
+            placeholderContainer.visibility = View.GONE
+        } else {
+            rendererView?.visibility = View.GONE
+            placeholderContainer.visibility = View.GONE
+        }
+
+        loadingIndicator.visibility = View.GONE
+        muteButton.isEnabled = false
+        muteButton.alpha = 0.5f
+        endButton.isEnabled = false
+        endButton.alpha = 0.5f
+    }
+
+    private fun muteTapped() {
+        isMuted = !isMuted
+        if (isMuted) {
+            voiceSession?.pauseListening()
+            muteButton.setImageResource(R.drawable.sierra_ic_mic_off_24)
+        } else {
+            voiceSession?.resumeListening()
+            muteButton.setImageResource(R.drawable.sierra_ic_mic_24)
+        }
+    }
+
+    private fun userFacingErrorMessage(): String {
+        return "Voice connection failed: Please try again later"
+    }
+
+    override fun onReceiveCredentials(conversationID: String, encryptionKey: String) {
+        Log.d(VOICE_TAG, "Voice credentials received for conversationId=$conversationID")
+    }
+
+    override fun onReceiveAttachments(attachments: List<Map<String, Any?>>) {
+        if (attachments.isNotEmpty()) {
+            Handler(Looper.getMainLooper()).post {
+                markInitialGreetingReceivedIfNeeded()
+            }
+        }
+
+        val renderableAttachments = mutableListOf<Map<String, Any?>>()
+        for (attachment in attachments) {
+            val type = attachment["type"] as? String ?: ""
+            val data = attachment["data"] as? Map<*, *>
+            if (type == "message") {
+                val text = data?.get("text") as? String
+                if (!text.isNullOrEmpty()) {
+                    voiceSession?.sendTextClient(text)
+                    continue
+                }
+            }
+            if (type == "custom") {
+                val dataType = data?.get("type") as? String
+                val message = data?.get("message") as? String
+                if (dataType == "send-client-message" && !message.isNullOrEmpty()) {
+                    voiceSession?.sendTextClient(message)
+                    continue
+                }
+            }
+            renderableAttachments.add(attachment)
+        }
+
+        if (renderableAttachments.isEmpty()) {
+            return
+        }
+
+        val signature = canonicalizeForSignature(renderableAttachments)
+        if (signature == lastRenderableAttachmentsSignature) {
+            return
+        }
+        lastRenderableAttachmentsSignature = signature
+
+        Handler(Looper.getMainLooper()).post {
+            if (rendererFailed) {
+                return@post
+            }
+            ensureRendererLoaded()
+            if (rendererFailed) {
+                return@post
+            }
+            if (!hasShownFirstAttachment) {
+                hasShownFirstAttachment = true
+                placeholderContainer.visibility = View.GONE
+                rendererView?.visibility = View.VISIBLE
+            }
+            rendererView?.pushAttachments(renderableAttachments)
+        }
+    }
+
+    override fun onChangeState(state: VoiceSessionManager.State) {
+        Handler(Looper.getMainLooper()).post {
+            updateUIForState(state)
+        }
+    }
+
+    override fun onError(error: Throwable) {
+        Log.e(VOICE_TAG, "Voice session error", error)
+        Handler(Looper.getMainLooper()).post {
+            showErrorState(userFacingErrorMessage())
+            voiceCallbacks?.onVoiceError(error)
+        }
+    }
+
+    override fun onEnd() {
+        Handler(Looper.getMainLooper()).post {
+            updateUIForState(VoiceSessionManager.State.ENDED)
+            if (!hasShutdownVoiceSession) {
+                hasShutdownVoiceSession = true
+                voiceCallbacks?.onVoiceEnded()
+                if (isAdded) {
+                    VoiceSessionService.stop(requireContext())
+                }
+            }
+        }
+    }
+
+    override fun onSVPClientEvent(text: String, attachments: List<Map<String, Any?>>) {
+        if (text.isNotEmpty()) {
+            voiceSession?.sendTextClient(text)
+        }
+
+        val forwardAttachments = mutableListOf<Map<String, Any?>>()
+        for (attachment in attachments) {
+            val attType = attachment["type"] as? String ?: ""
+            if (attType == "custom") {
+                val data = attachment["data"] as? Map<*, *>
+                val dataType = data?.get("type") as? String
+                val message = data?.get("message") as? String
+                if (dataType == "send-client-message" && !message.isNullOrEmpty()) {
+                    voiceSession?.sendTextClient(message)
+                    continue
+                }
+            }
+            forwardAttachments.add(attachment)
+        }
+
+        if (forwardAttachments.isNotEmpty()) {
+            voiceSession?.sendAttachmentsClient(forwardAttachments)
+        }
+    }
+
+    override fun onMobileRendererError(error: Throwable) {
+        Log.e(VOICE_TAG, "Renderer error", error)
+        rendererFailed = true
+        rendererView?.visibility = View.GONE
+        placeholderContainer.visibility = View.VISIBLE
+    }
+
+    private fun canonicalizeForSignature(value: Any?): String {
+        return when (value) {
+            null -> "null"
+            is String -> JSONObject.quote(value)
+            is Number, is Boolean -> value.toString()
+            is Map<*, *> -> {
+                val entries = value.entries
+                    .filter { it.key is String }
+                    .sortedBy { it.key as String }
+                    .joinToString(",") { entry ->
+                        val key = entry.key as String
+                        "${JSONObject.quote(key)}:${canonicalizeForSignature(entry.value)}"
+                    }
+                "{$entries}"
+            }
+            is Iterable<*> -> {
+                val items = value.joinToString(",") { item -> canonicalizeForSignature(item) }
+                "[$items]"
+            }
+            is Array<*> -> {
+                val items = value.joinToString(",") { item -> canonicalizeForSignature(item) }
+                "[$items]"
+            }
+            is JSONArray -> {
+                val items = (0 until value.length()).joinToString(",") { index ->
+                    canonicalizeForSignature(value.opt(index))
+                }
+                "[$items]"
+            }
+            is JSONObject -> {
+                val keys = value.keys().asSequence().toList().sorted()
+                val entries = keys.joinToString(",") { key ->
+                    "${JSONObject.quote(key)}:${canonicalizeForSignature(value.opt(key))}"
+                }
+                "{$entries}"
+            }
+            else -> JSONObject.quote(value.toString())
+        }
+    }
+}
+
+@OptIn(ExperimentalVoiceApi::class)
+internal class AgentVoiceViewModel : ViewModel() {
+    internal var controller: AgentVoiceController? = null
+}
+
+private fun Fragment.resolvePlaceholderTextColor(): Int {
+    val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    val alpha = 184
+    return if (uiMode == Configuration.UI_MODE_NIGHT_YES) {
+        Color.argb(alpha, 238, 238, 238)
+    } else {
+        Color.argb(alpha, 17, 17, 17)
+    }
+}
+
+private val Int.dp: Int
+    get() = (this * Resources.getSystem().displayMetrics.density).toInt()
+

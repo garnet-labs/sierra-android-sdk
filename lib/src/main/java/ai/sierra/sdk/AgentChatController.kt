@@ -643,7 +643,7 @@ private fun generateUserAgent(context: Context): String {
     val androidVersion = Build.VERSION.RELEASE
     val model = Build.MODEL
 
-    return "Sierra-Android-SDK ($appName/$appVersion $model/$androidVersion)"
+    return "Sierra-Android-SDK ($appName/$appVersion $model/$androidVersion) WebView"
 }
 
 internal class AgentChatViewModel : ViewModel() {
