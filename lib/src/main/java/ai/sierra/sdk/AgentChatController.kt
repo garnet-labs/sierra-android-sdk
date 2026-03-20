@@ -213,6 +213,11 @@ data class AgentChatControllerOptions(
     var startAtTop: Boolean = false,
 
     /**
+     * Whether to show a scroll-to-bottom indicator when the user scrolls up in the chat.
+     */
+    var showScrollToBottom: Boolean = false,
+
+    /**
      * Pin the disclosure text to the top of the chat frame so that it is
      * visible throughout the conversation.
      */
@@ -572,6 +577,9 @@ class AgentChatFragment : Fragment() {
         }
         if (options.startAtTop) {
             urlBuilder.appendQueryParameter("startAtTop", "true")
+        }
+        if (options.showScrollToBottom) {
+            urlBuilder.appendQueryParameter("showScrollToBottom", "true")
         }
         if (options.pinDisclosure) {
             urlBuilder.appendQueryParameter("pinDisclosure", "true")

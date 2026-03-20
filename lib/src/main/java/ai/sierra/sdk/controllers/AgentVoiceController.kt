@@ -83,6 +83,11 @@ public class AgentVoiceController(
 ) {
     private var connectedFragment: AgentVoiceFragment? = null
     public var conversationEventListener: ConversationEventListener? = null
+    public var voiceCallbacks: VoiceCallbacks? = null
+        set(value) {
+            field = value
+            connectedFragment?.voiceCallbacks = value
+        }
 
     @Deprecated("Use AgentVoiceControllerOptions.disableInterruptions.")
     public var disableInterruptions: Boolean
@@ -122,6 +127,7 @@ public class AgentVoiceController(
 
     internal fun connectToFragment(fragment: AgentVoiceFragment) {
         connectedFragment = fragment
+        fragment.voiceCallbacks = voiceCallbacks
     }
 
     public fun interrupt() {
@@ -174,6 +180,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     private var hasShownFirstAttachment = false
     private var hasReceivedInitialGreeting = false
     private var hasShutdownVoiceSession = false
+    private var hasDeliveredVoiceEnded = false
     private var rendererFailed = false
     private var lastRenderableAttachmentsSignature: String? = null
     private var isMuted = false
@@ -264,27 +271,17 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
 
     internal fun endConversation() {
         endConversationForExit()
-        dismissVoiceController()
     }
 
     private fun endConversationForExit() {
-        if (hasShutdownVoiceSession) {
-            return
-        }
         shutdownVoiceSessionIfNeeded()
-        voiceCallbacks?.onVoiceEnded()
-    }
-
-    private fun dismissVoiceController() {
-        if (!isAdded) {
-            return
-        }
-        requireActivity().onBackPressedDispatcher.onBackPressed()
+        deliverVoiceEndedIfNeeded()
     }
 
     private fun startVoiceSession() {
         val agentParameters = options.voiceAgentParameters ?: hashMapOf()
         hasShutdownVoiceSession = false
+        hasDeliveredVoiceEnded = false
         VoiceSessionService.start(requireContext())
         voiceSession = VoiceSessionManager(
             config = agentConfig,
@@ -306,6 +303,14 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         if (isAdded) {
             VoiceSessionService.stop(requireContext())
         }
+    }
+
+    private fun deliverVoiceEndedIfNeeded() {
+        if (hasDeliveredVoiceEnded) {
+            return
+        }
+        hasDeliveredVoiceEnded = true
+        voiceCallbacks?.onVoiceEnded()
     }
 
     private fun createToolbar(): Toolbar {
@@ -562,7 +567,27 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     }
 
     private fun userFacingErrorMessage(): String {
-        return "Voice connection failed: Please try again later"
+        return "Voice connection failed: Please check your credentials or try again later"
+    }
+
+    private fun isExternalAudioInterruptionError(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            val className = current::class.java.name.lowercase()
+            val message = current.message?.lowercase().orEmpty()
+            val isAudioRelated = className.contains("audio") || message.contains("audio")
+            if (
+                className.contains("audiofocus") ||
+                message.contains("audio focus") ||
+                message.contains("audiofocus") ||
+                (isAudioRelated && message.contains("interruption")) ||
+                message.contains("cannot interrupt others")
+            ) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     override fun onReceiveCredentials(conversationID: String, encryptionKey: String) {
@@ -634,6 +659,10 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     override fun onError(error: Throwable) {
         Log.e(VOICE_TAG, "Voice session error", error)
         Handler(Looper.getMainLooper()).post {
+            if (isExternalAudioInterruptionError(error)) {
+                endConversationForExit()
+                return@post
+            }
             showErrorState(userFacingErrorMessage())
             voiceCallbacks?.onVoiceError(error)
         }
@@ -642,13 +671,8 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     override fun onEnd() {
         Handler(Looper.getMainLooper()).post {
             updateUIForState(VoiceSessionManager.State.ENDED)
-            if (!hasShutdownVoiceSession) {
-                hasShutdownVoiceSession = true
-                voiceCallbacks?.onVoiceEnded()
-                if (isAdded) {
-                    VoiceSessionService.stop(requireContext())
-                }
-            }
+            shutdownVoiceSessionIfNeeded()
+            deliverVoiceEndedIfNeeded()
         }
     }
 

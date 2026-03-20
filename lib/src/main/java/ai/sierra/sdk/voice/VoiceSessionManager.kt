@@ -124,7 +124,9 @@ internal class VoiceSessionManager(
             return@OnAudioFocusChangeListener
         }
         when (focusChange) {
-            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                endSessionForExternalAudioInterruption("audio_focus_loss:$focusChange")
+            }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 isSystemListeningPaused = true
@@ -136,6 +138,15 @@ internal class VoiceSessionManager(
                 }
             }
         }
+    }
+
+    private fun endSessionForExternalAudioInterruption(reason: String) {
+        if (!isSessionRunning) {
+            return
+        }
+        isSystemListeningPaused = true
+        disconnect(reason = reason)
+        mainHandler.post { delegate.onEnd() }
     }
 
     fun connect() {
@@ -173,8 +184,20 @@ internal class VoiceSessionManager(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                val wasRunning = isSessionRunning
                 isSessionRunning = false
-                mainHandler.post { state = State.ENDED }
+                mainHandler.post {
+                    // If the server closes before session bootstrap completes (e.g. wrong target),
+                    // surface an explicit error instead of silently ending.
+                    if (wasRunning && !hasDeliveredSessionInfo) {
+                        delegate.onError(
+                            IllegalStateException(
+                                "Voice session closed before initialization (code=$code, reason=$reason)"
+                            )
+                        )
+                    }
+                    state = State.ENDED
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
