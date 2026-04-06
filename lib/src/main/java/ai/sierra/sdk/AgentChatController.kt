@@ -34,6 +34,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -260,7 +261,10 @@ data class AgentChatControllerOptions(
     var endConversationLabel: String = "End Conversation",
 
     /** Label for the new chat button. */
-    var newChatButtonLabel: String = "Start new chat"
+    var newChatButtonLabel: String = "Start new chat",
+
+    /** Message that will be automatically sent from the user when the conversation starts. */
+    var initialUserMessage: String? = null
 
 ) : Parcelable {
     @IgnoredOnParcel
@@ -296,6 +300,10 @@ class AgentChatController(
 
     fun endConversation() {
         this.connectedFragment?.endConversation()
+    }
+
+    fun sendUserAttachment(attachments: List<UserAttachment>) {
+        this.connectedFragment?.sendUserAttachment(attachments)
     }
 
     fun showConversationList() {
@@ -575,6 +583,9 @@ class AgentChatFragment : Fragment() {
         if (options.canStartNewChat) {
             urlBuilder.appendQueryParameter("canStartNewChat", "true")
         }
+        if (!options.initialUserMessage.isNullOrEmpty()) {
+            urlBuilder.appendQueryParameter("initialUserMessage", options.initialUserMessage)
+        }
         if (options.startAtTop) {
             urlBuilder.appendQueryParameter("startAtTop", "true")
         }
@@ -637,6 +648,18 @@ class AgentChatFragment : Fragment() {
 
     fun endConversation() {
         webView.evaluateJavascript("sierraAndroid.endConversation()", null)
+    }
+
+    fun sendUserAttachment(attachments: List<UserAttachment>) {
+        val payload = JSONArray().apply {
+            attachments.forEach { attachment ->
+                put(attachment.toJSONObject())
+            }
+        }
+        webView.evaluateJavascript(
+            "sierraAndroid.sendUserAttachment(JSON.parse(${JSONObject.quote(payload.toString())}))",
+            null
+        )
     }
 
     fun showConversationList() {

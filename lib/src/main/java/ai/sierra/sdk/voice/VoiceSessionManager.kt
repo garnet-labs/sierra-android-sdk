@@ -45,6 +45,7 @@ internal class VoiceSessionManager(
     private val config: AgentConfig,
     private val conversationId: String = UUID.randomUUID().toString(),
     private val disableInterruptions: Boolean = false,
+    private val localeTag: String = Locale.getDefault().toLanguageTag(),
     private val agentParameters: Map<String, String> = emptyMap(),
     private val allowInsecureLocalConnections: Boolean = false,
     private val delegate: VoiceSessionDelegate
@@ -266,7 +267,7 @@ internal class VoiceSessionManager(
             .put("compatibilityDate", compatibilityDate)
             .put("conversationId", conversationId)
             .put("audioFormat", "linear16")
-            .put("locale", Locale.getDefault().toLanguageTag())
+            .put("locale", localeTag)
         if (agentParameters.isNotEmpty()) {
             subMsg.put("agentParameters", JSONObject(agentParameters))
         }

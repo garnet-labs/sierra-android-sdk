@@ -31,6 +31,7 @@ import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 @RequiresOptIn(
     message = "This voice API is experimental and may change without notice.",
@@ -63,6 +64,7 @@ public data class AgentVoiceControllerOptions(
     var titleBarMessage: String? = null,
     var voiceStyle: AgentVoiceStyle = AgentVoiceStyle(),
     var voicePlaceholderText: String = "How can I help you today?",
+    var locale: String = Locale.getDefault().toLanguageTag(),
     var voiceAgentParameters: HashMap<String, String>? = null,
     var disableInterruptions: Boolean = false,
     var allowInsecureLocalConnections: Boolean = false
@@ -286,6 +288,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         voiceSession = VoiceSessionManager(
             config = agentConfig,
             disableInterruptions = isDisableInterruptions,
+            localeTag = options.locale,
             agentParameters = agentParameters,
             allowInsecureLocalConnections = options.allowInsecureLocalConnections,
             delegate = this
