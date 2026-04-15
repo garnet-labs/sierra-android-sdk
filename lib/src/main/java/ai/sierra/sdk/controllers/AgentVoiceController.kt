@@ -67,7 +67,11 @@ public data class AgentVoiceControllerOptions(
     var locale: String = Locale.getDefault().toLanguageTag(),
     var voiceAgentParameters: HashMap<String, String>? = null,
     var disableInterruptions: Boolean = false,
-    var allowInsecureLocalConnections: Boolean = false
+    var allowInsecureLocalConnections: Boolean = false,
+    /** Included in the SVP `open` submessage. Defaults to `true`. */
+    var enableText: Boolean = true,
+    /** Included in the SVP `open` submessage. Defaults to `true`. */
+    var forwardAgentAttachments: Boolean = true
 ) : Parcelable {
     @Deprecated("Use voiceAgentParameters instead.")
     @IgnoredOnParcel
@@ -291,6 +295,8 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             localeTag = options.locale,
             agentParameters = agentParameters,
             allowInsecureLocalConnections = options.allowInsecureLocalConnections,
+            enableText = options.enableText,
+            forwardAgentAttachments = options.forwardAgentAttachments,
             delegate = this
         ).also { it.connect() }
         updateUIForState(VoiceSessionManager.State.CONNECTING)
@@ -604,33 +610,11 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             }
         }
 
-        val renderableAttachments = mutableListOf<Map<String, Any?>>()
-        for (attachment in attachments) {
-            val type = attachment["type"] as? String ?: ""
-            val data = attachment["data"] as? Map<*, *>
-            if (type == "message") {
-                val text = data?.get("text") as? String
-                if (!text.isNullOrEmpty()) {
-                    voiceSession?.sendTextClient(text)
-                    continue
-                }
-            }
-            if (type == "custom") {
-                val dataType = data?.get("type") as? String
-                val message = data?.get("message") as? String
-                if (dataType == "send-client-message" && !message.isNullOrEmpty()) {
-                    voiceSession?.sendTextClient(message)
-                    continue
-                }
-            }
-            renderableAttachments.add(attachment)
-        }
-
-        if (renderableAttachments.isEmpty()) {
+        if (attachments.isEmpty()) {
             return
         }
 
-        val signature = canonicalizeForSignature(renderableAttachments)
+        val signature = canonicalizeForSignature(attachments)
         if (signature == lastRenderableAttachmentsSignature) {
             return
         }
@@ -649,7 +633,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
                 placeholderContainer.visibility = View.GONE
                 rendererView?.visibility = View.VISIBLE
             }
-            rendererView?.pushAttachments(renderableAttachments)
+            rendererView?.pushAttachments(attachments)
         }
     }
 
@@ -683,24 +667,8 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         if (text.isNotEmpty()) {
             voiceSession?.sendTextClient(text)
         }
-
-        val forwardAttachments = mutableListOf<Map<String, Any?>>()
-        for (attachment in attachments) {
-            val attType = attachment["type"] as? String ?: ""
-            if (attType == "custom") {
-                val data = attachment["data"] as? Map<*, *>
-                val dataType = data?.get("type") as? String
-                val message = data?.get("message") as? String
-                if (dataType == "send-client-message" && !message.isNullOrEmpty()) {
-                    voiceSession?.sendTextClient(message)
-                    continue
-                }
-            }
-            forwardAttachments.add(attachment)
-        }
-
-        if (forwardAttachments.isNotEmpty()) {
-            voiceSession?.sendAttachmentsClient(forwardAttachments)
+        if (attachments.isNotEmpty()) {
+            voiceSession?.sendAttachmentsClient(attachments)
         }
     }
 

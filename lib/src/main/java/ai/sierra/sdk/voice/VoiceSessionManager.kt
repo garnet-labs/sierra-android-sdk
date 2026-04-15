@@ -48,6 +48,8 @@ internal class VoiceSessionManager(
     private val localeTag: String = Locale.getDefault().toLanguageTag(),
     private val agentParameters: Map<String, String> = emptyMap(),
     private val allowInsecureLocalConnections: Boolean = false,
+    private val enableText: Boolean = true,
+    private val forwardAgentAttachments: Boolean = true,
     private val delegate: VoiceSessionDelegate
 ) {
     enum class State {
@@ -268,6 +270,8 @@ internal class VoiceSessionManager(
             .put("conversationId", conversationId)
             .put("audioFormat", "linear16")
             .put("locale", localeTag)
+            .put("enableText", enableText)
+            .put("forwardAgentAttachments", forwardAgentAttachments)
         if (agentParameters.isNotEmpty()) {
             subMsg.put("agentParameters", JSONObject(agentParameters))
         }

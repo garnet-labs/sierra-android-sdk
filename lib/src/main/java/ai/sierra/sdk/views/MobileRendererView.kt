@@ -23,6 +23,30 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
+/**
+ * Shapes posted by `mobile-renderer.tsx` use `attachments` (array). Older bundles may send a single
+ * `attachment` with object `data` (mirrors iOS `MobileRendererView` normalization).
+ */
+private fun svpClientEventAttachments(json: JSONObject): List<Map<String, Any?>> {
+    val arr = json.optJSONArray("attachments")
+    if (arr != null) {
+        val out = mutableListOf<Map<String, Any?>>()
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            out.add(jsonObjectToMap(obj))
+        }
+        return out
+    }
+    val attachment = json.optJSONObject("attachment") ?: return emptyList()
+    val data = attachment.optJSONObject("data") ?: return emptyList()
+    return listOf(
+        mapOf(
+            "type" to "custom",
+            "data" to jsonObjectToMap(data)
+        )
+    )
+}
+
 internal interface MobileRendererDelegate {
     fun onSVPClientEvent(text: String, attachments: List<Map<String, Any?>>)
     fun onMobileRendererError(error: Throwable)
@@ -132,18 +156,9 @@ internal class MobileRendererView(
             try {
                 val json = JSONObject(dataJSONStr)
                 val text = json.optString("text", "")
-                val attachments = mutableListOf<Map<String, Any?>>()
-                val arr = json.optJSONArray("attachments")
-                if (arr != null) {
-                    for (i in 0 until arr.length()) {
-                        val obj = arr.optJSONObject(i) ?: continue
-                        attachments.add(jsonObjectToMap(obj))
-                    }
-                } else {
-                    val attachment = json.optJSONObject("attachment")
-                    if (attachment != null) {
-                        attachments.add(jsonObjectToMap(attachment))
-                    }
+                val attachments = svpClientEventAttachments(json)
+                if (text.isEmpty() && attachments.isEmpty()) {
+                    return
                 }
                 delegate.onSVPClientEvent(text, attachments)
             } catch (e: JSONException) {

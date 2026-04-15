@@ -16,6 +16,7 @@ import android.os.Parcelable
 import android.print.PrintAttributes
 import android.print.PrintManager
 import android.util.Log
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -27,6 +28,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.ProgressBar
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
@@ -319,6 +322,7 @@ private data class AgentChatFragmentArgs(
 
 class AgentChatFragment : Fragment() {
     private lateinit var webView: WebView
+    private lateinit var loadingSpinner: ProgressBar
     internal var listener: ConversationEventListener? = null
     internal var controller: AgentChatController? = null
     private var storage: ConversationStorage? = null
@@ -419,11 +423,22 @@ class AgentChatFragment : Fragment() {
             }
         }
 
-        webView = WebView(requireContext()).apply {
+        val rootContainer = FrameLayout(requireContext()).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            args.options.chatStyle.colors.background?.let { setBackgroundColor(it) }
+        }
+
+        webView = WebView(requireContext()).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            // Keep the web content hidden until the embed reports it is ready,
+            // preventing transient web loading states from flashing onscreen.
+            alpha = 0f
             // Set background color to match chat style to avoid white flash while loading
             args.options.chatStyle.colors.background?.let { setBackgroundColor(it) }
         }
@@ -462,7 +477,7 @@ class AgentChatFragment : Fragment() {
                 }
             }
             addJavascriptInterface(
-                ChatWebViewInterface(requireContext(), storage, listener, this),
+                ChatWebViewInterface(requireContext(), storage, listener, this@AgentChatFragment, this),
                 "AndroidSDK"
             )
         }
@@ -470,7 +485,18 @@ class AgentChatFragment : Fragment() {
             WebView.setWebContentsDebuggingEnabled(true)
         }
 
-        return webView
+        loadingSpinner = ProgressBar(requireContext()).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            )
+            visibility = View.VISIBLE
+        }
+
+        rootContainer.addView(webView)
+        rootContainer.addView(loadingSpinner)
+        return rootContainer
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -494,6 +520,7 @@ class AgentChatFragment : Fragment() {
                 pageLoaded = true
                 lastUiMode = currentUiMode
                 restoreStorage(savedInstanceState)
+                showWebContent()
                 webView.restoreState(savedInstanceState)
                 return
             }
@@ -618,6 +645,21 @@ class AgentChatFragment : Fragment() {
         webView.loadUrl(url)
     }
 
+    internal fun showWebContent() {
+        if (!::webView.isInitialized || !::loadingSpinner.isInitialized) {
+            return
+        }
+        loadingSpinner.visibility = View.GONE
+        webView.animate().alpha(1f).setDuration(300).start()
+    }
+
+    internal fun stopLoadingIndicator() {
+        if (!::loadingSpinner.isInitialized) {
+            return
+        }
+        loadingSpinner.visibility = View.GONE
+    }
+
     private fun restoreStorage(savedInstanceState: Bundle) {
         val savedStorage = savedInstanceState.getSerializable("storage") as? HashMap<String, String>
         if (savedStorage != null) {
@@ -689,6 +731,14 @@ private class ChatWebViewClient(
 ) : WebViewClient() {
     private var hadError: Boolean = false
 
+    private fun handleMainUrlLoadFailure(view: WebView?) {
+        view?.loadUrl("about:blank")
+        fragment.pageLoaded = false
+        hadError = true
+        fragment.stopLoadingIndicator()
+        listener?.onConversationInitializationError()
+    }
+
     override fun onPageFinished(view: WebView?, url: String?) {
         if (url.toString().startsWith(agentConfig.url) && !hadError) {
             fragment.pageLoaded = true
@@ -700,9 +750,14 @@ private class ChatWebViewClient(
         if (listener != null) {
             Log.w(TAG, "Delegating SSL error handling to conversation listener for URL ${error?.url}")
             listener.onReceivedSslError(view, handler, error)
-        } else {
-            Log.w(TAG, "Cancelling SSL error for URL ${error?.url}")
-            handler?.cancel()
+            return
+        }
+
+        Log.w(TAG, "Cancelling SSL error for URL ${error?.url}")
+        handler?.cancel()
+
+        if (error?.url?.startsWith(agentConfig.url) == true) {
+            handleMainUrlLoadFailure(view)
         }
     }
 
@@ -716,10 +771,7 @@ private class ChatWebViewClient(
                 TAG,
                 "Received error trying to load the main URL: code=${error.errorCode} description=${error.description}"
             )
-            view.loadUrl("about:blank")
-            fragment.pageLoaded = false
-            hadError = true
-            listener?.onConversationInitializationError()
+            handleMainUrlLoadFailure(view)
         }
     }
 
@@ -748,9 +800,27 @@ private class ChatWebViewInterface(
     private val context: Context,
     private val storage: ConversationStorage?,
     private val listener: ConversationEventListener?,
+    private val fragment: AgentChatFragment,
     private val webView: WebView
 ) {
     private val handler = Handler(Looper.getMainLooper())
+
+    private fun handleOnOpen(isNewConversation: Boolean) {
+        handler.post {
+            fragment.showWebContent()
+        }
+        listener?.onOpen(isNewConversation)
+    }
+
+    @JavascriptInterface
+    fun onOpen() {
+        handleOnOpen(true)
+    }
+
+    @JavascriptInterface
+    fun onOpen(isNewConversation: Boolean) {
+        handleOnOpen(isNewConversation)
+    }
 
     @JavascriptInterface
     fun onTransfer(dataJSONStr: String) {

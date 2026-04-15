@@ -47,6 +47,17 @@ sealed class SecretExpiryResult {
 
 interface ConversationEventListener {
     /**
+     * Callback invoked when the embedded web UI is ready to be displayed.
+     *
+     * This fires before the first agent message is necessarily rendered and may fire before a
+     * conversation ID is available.
+     *
+     * @param isNewConversation True when the chat opened a new conversation rather than resuming
+     * an existing one.
+     */
+    fun onOpen(isNewConversation: Boolean) {}
+
+    /**
      * Callback invoked on the main thread when the agent chat encounters a critical error and
      * cannot begin the conversation.
      */
@@ -120,6 +131,12 @@ interface ConversationEventListener {
  */
 internal class MainThreadConversationEventListener(private val listener: ConversationEventListener?) : ConversationEventListener {
     private val handler = Handler(Looper.getMainLooper())
+
+    override fun onOpen(isNewConversation: Boolean) {
+        handler.post {
+            listener?.onOpen(isNewConversation)
+        }
+    }
 
     override fun onConversationInitializationError() {
         handler.post {
