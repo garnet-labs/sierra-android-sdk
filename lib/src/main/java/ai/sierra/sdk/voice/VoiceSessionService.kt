@@ -8,6 +8,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -68,14 +69,38 @@ internal class VoiceSessionService : Service() {
         private const val CHANNEL_ID = "sierra_voice_channel"
         private const val NOTIFICATION_ID = 9201
 
+        private fun isServiceDeclaredInManifest(context: Context): Boolean {
+            return try {
+                val componentName = android.content.ComponentName(context, VoiceSessionService::class.java)
+                context.packageManager.getServiceInfo(componentName, 0)
+                true
+            } catch (_: PackageManager.NameNotFoundException) {
+                false
+            }
+        }
+
         fun start(context: Context) {
+            if (!isServiceDeclaredInManifest(context)) {
+                Log.e(
+                    VOICE_TAG,
+                    "VoiceSessionService is not declared in the merged manifest. " +
+                        "Add the sierra-android-sdk-voice dependency to your app module."
+                )
+                return
+            }
             try {
                 ContextCompat.startForegroundService(
                     context,
                     Intent(context, VoiceSessionService::class.java)
                 )
             } catch (e: Exception) {
-                Log.e(VOICE_TAG, "Failed to start VoiceSessionService", e)
+                Log.e(
+                    VOICE_TAG,
+                    "Failed to start VoiceSessionService. " +
+                        "Ensure the sierra-android-sdk-voice module is included and the " +
+                        "manifest declares the service.",
+                    e
+                )
             }
         }
 

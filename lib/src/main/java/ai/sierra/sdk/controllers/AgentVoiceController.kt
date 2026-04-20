@@ -405,8 +405,8 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         muteButton = createCircleButton(R.drawable.sierra_ic_mic_24).apply {
             contentDescription = "Mute microphone"
         }
-        endButton = createCircleButton(R.drawable.sierra_ic_call_end_24).apply {
-            contentDescription = "End conversation"
+        endButton = createCircleButton(R.drawable.sierra_ic_close_24).apply {
+            contentDescription = "Close conversation"
         }
 
         muteButton.setOnClickListener { muteTapped() }
