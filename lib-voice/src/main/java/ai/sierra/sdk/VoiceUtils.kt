@@ -1,4 +1,5 @@
 // Copyright Sierra
+@file:OptIn(SierraInternalApi::class)
 
 package ai.sierra.sdk
 
@@ -100,3 +101,12 @@ internal fun generateVoiceUserAgent(context: Context, isWebView: Boolean = false
     val suffix = if (isWebView) " WebView" else ""
     return "Sierra-Android-SDK ($appName/$appVersion $model/$androidVersion)$suffix"
 }
+
+internal val AgentConfig.conversationRendererURL: String
+    get() = "${apiHost.embedBaseURL}/agent/${token}/mobile-renderer"
+
+internal val AgentAPIHost.voiceBaseURL: String
+    get() = when (this) {
+        AgentAPIHost.LOCAL -> "https://sierra.codes:8084"
+        else -> apiBaseURL
+    }

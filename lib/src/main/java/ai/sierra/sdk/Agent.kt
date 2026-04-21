@@ -1,4 +1,5 @@
 // Copyright Sierra
+@file:OptIn(SierraInternalApi::class)
 
 package ai.sierra.sdk
 
@@ -24,7 +25,6 @@ data class AgentConfig(
     val headlessAPIToken: String? = null
 ): Parcelable {
     internal val url get() = "${apiHost.embedBaseURL}/agent/${token}/mobile"
-    internal val conversationRendererURL get() = "${apiHost.embedBaseURL}/agent/${token}/mobile-renderer"
 }
 
 enum class AgentAPIHost(val hostname: String, val displayName: String) {
@@ -34,7 +34,8 @@ enum class AgentAPIHost(val hostname: String, val displayName: String) {
     STAGING("staging.sierra.chat", "Staging"),
     LOCAL("chat.sierra.codes:8083", "Local");
 
-    internal val apiBaseURL: String
+    @SierraInternalApi
+    public val apiBaseURL: String
         get() = when (this) {
             PROD -> "https://api.sierra.chat"
             EU -> "https://eu.api.sierra.chat"
@@ -43,13 +44,8 @@ enum class AgentAPIHost(val hostname: String, val displayName: String) {
             LOCAL -> "https://api.sierra.codes:8083"
         }
 
-    internal val voiceBaseURL: String
-        get() = when (this) {
-            LOCAL -> "https://sierra.codes:8084"
-            else -> apiBaseURL
-        }
-
-    internal val embedBaseURL: String
+    @SierraInternalApi
+    public val embedBaseURL: String
         get() = when (this) {
             PROD -> "https://sierra.chat"
             EU -> "https://eu.sierra.chat"
@@ -68,7 +64,8 @@ enum class AgentAPIHost(val hostname: String, val displayName: String) {
  * @throws IllegalArgumentException if [PersistenceMode.DISK] is requested without providing a context.
  */
 class Agent(
-    internal val config: AgentConfig,
+    @property:SierraInternalApi
+    public val config: AgentConfig,
     context: Context? = null
 ) {
     init {

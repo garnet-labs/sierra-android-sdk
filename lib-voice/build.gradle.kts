@@ -42,8 +42,15 @@ android {
 }
 
 dependencies {
+    // The core SDK module is included under different names depending on which settings root is
+    // active: `android/settings.gradle.kts` exposes it as `:SierraSDK`, while the standalone
+    // `android/SierraSDK/settings.gradle.kts` (used when publishing the SDK from the mirrored
+    // repo) exposes it as `:lib`.
     val coreModulePath = if (project.findProject(":SierraSDK") != null) ":SierraSDK" else ":lib"
     api(project(coreModulePath))
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 
 publishing {

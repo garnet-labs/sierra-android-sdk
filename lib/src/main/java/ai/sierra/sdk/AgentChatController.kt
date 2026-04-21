@@ -1,4 +1,5 @@
 // Copyright Sierra
+@file:OptIn(SierraInternalApi::class)
 
 package ai.sierra.sdk
 

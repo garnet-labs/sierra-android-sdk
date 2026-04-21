@@ -1,7 +1,9 @@
 // Copyright Sierra
+@file:OptIn(SierraInternalApi::class)
 
 package ai.sierra.sdk
 
+import ai.sierra.sdk.voice.R
 import android.Manifest
 import android.animation.ObjectAnimator
 import android.content.pm.PackageManager
@@ -33,22 +35,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
-@RequiresOptIn(
-    message = "This voice API is experimental and may change without notice.",
-    level = RequiresOptIn.Level.ERROR
-)
-@Retention(AnnotationRetention.BINARY)
-@Target(AnnotationTarget.CLASS, AnnotationTarget.FUNCTION, AnnotationTarget.PROPERTY)
-public annotation class ExperimentalVoiceApi
-
-@ExperimentalVoiceApi
 public interface VoiceCallbacks {
     public fun onVoiceEnded()
     public fun onVoiceError(error: Throwable)
 }
 
 @Parcelize
-@ExperimentalVoiceApi
 public data class AgentVoiceStyle(
     val backgroundColor: Int = Color.WHITE,
     val titleBarColor: Int = Color.WHITE,
@@ -58,7 +50,6 @@ public data class AgentVoiceStyle(
 ) : Parcelable
 
 @Parcelize
-@ExperimentalVoiceApi
 public data class AgentVoiceControllerOptions(
     val name: String,
     var titleBarMessage: String? = null,
@@ -82,7 +73,6 @@ public data class AgentVoiceControllerOptions(
         }
 }
 
-@ExperimentalVoiceApi
 public class AgentVoiceController(
     internal val agent: Agent,
     internal val options: AgentVoiceControllerOptions = AgentVoiceControllerOptions(name = "Voice Agent")
@@ -146,13 +136,11 @@ public class AgentVoiceController(
 }
 
 @Parcelize
-@OptIn(ExperimentalVoiceApi::class)
 private data class AgentVoiceFragmentArgs(
     val agentConfig: AgentConfig,
     val options: AgentVoiceControllerOptions
 ) : Parcelable
 
-@OptIn(ExperimentalVoiceApi::class)
 internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRendererDelegate {
     internal var controller: AgentVoiceController? = null
     public var voiceCallbacks: VoiceCallbacks? = null
@@ -720,7 +708,6 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     }
 }
 
-@OptIn(ExperimentalVoiceApi::class)
 internal class AgentVoiceViewModel : ViewModel() {
     internal var controller: AgentVoiceController? = null
 }

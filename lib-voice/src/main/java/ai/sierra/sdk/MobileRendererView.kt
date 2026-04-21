@@ -1,4 +1,5 @@
 // Copyright Sierra
+@file:OptIn(SierraInternalApi::class)
 
 package ai.sierra.sdk
 
@@ -52,7 +53,6 @@ internal interface MobileRendererDelegate {
     fun onMobileRendererError(error: Throwable)
 }
 
-@OptIn(ExperimentalVoiceApi::class)
 internal class MobileRendererView(
     context: Context,
     private val agentConfig: AgentConfig,
