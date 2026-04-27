@@ -75,8 +75,9 @@ data class AgentChatControllerOptions(
     val name: String,
 
     /**
-     * Use chat interface strings configured on the server (greeting, error messages, etc.).
-     * When enabled, server-configured strings take precedence over local string options.
+     * Use chat interface strings configured on the server (greeting, error messages, etc.),
+     * including server-managed locale/direction settings for those strings.
+     * When enabled, server-configured values take precedence over local string options.
      */
     val useConfiguredChatStrings: Boolean = false,
 
@@ -249,12 +250,20 @@ data class AgentChatControllerOptions(
     var messageLabelPlacement: MessageLabelPlacement = MessageLabelPlacement.DEFAULT,
 
     /**
+     * Explicitly set whether or not to auto-detect locale-specific chat strings and text direction
+     * from the conversation locale.
+     */
+    var autoDetectChatStrings: Boolean? = null,
+
+    /**
      * Explicitly set the text direction of the chat window.
      * - `LTR`: Forces the chat window to use a left-to-right language layout.
      * - `RTL`: Forces the chat window to use a right-to-left language layout.
      * - `AUTO`: Text direction is automatically configured from the conversation locale.
-     * When null and useConfiguredStyle is true, the server-configured value is used.
-     * Otherwise defaults to left-to-right.
+     * When null, automatically determined from locale if auto-detection is active --
+     * either via [autoDetectChatStrings] or the server's Agent Studio configuration
+     * when [useConfiguredChatStrings] is true. Otherwise falls back to the server
+     * value when [useConfiguredChatStrings] is true, or left-to-right.
      */
     var textDirection: TextDirection? = null,
 
@@ -271,8 +280,34 @@ data class AgentChatControllerOptions(
     var initialUserMessage: String? = null
 
 ) : Parcelable {
+    companion object {
+        // A baseline instance with the hardcoded English defaults, used to detect which
+        // fields the caller has actually customized. When locale auto-detect or
+        // server-configured chat strings are enabled, any field still equal to its
+        // default is omitted so locale defaults or server values can take effect.
+        internal val DEFAULTS = AgentChatControllerOptions(name = "")
+    }
+
     @IgnoredOnParcel
     var conversationEventListener: ConversationEventListener? = null
+
+    internal fun hasCustomGreetingMessage(): Boolean {
+        return greetingMessage != DEFAULTS.greetingMessage
+    }
+
+    internal fun shouldOmitDefaultChatStrings(): Boolean {
+        return autoDetectChatStrings == true || useConfiguredChatStrings
+    }
+
+    internal fun shouldUseGreetingMessageAsCustomGreeting(): Boolean {
+        if (greetingMessage.isEmpty()) {
+            return false
+        }
+        if (!shouldOmitDefaultChatStrings()) {
+            return true
+        }
+        return hasCustomGreetingMessage()
+    }
 }
 
 class AgentChatController(
@@ -557,21 +592,56 @@ class AgentChatFragment : Fragment() {
         )
         options.showTimestamps?.let { brandMap["showTimestamps"] = it }
         options.showSpeakerLabels?.let { brandMap["showBotName"] = it }
+        // If locale auto-detect or server-configured chat strings are enabled, remove any messages
+        // that are set to their default value so server-configured values or locale defaults can win.
+        if (options.shouldOmitDefaultChatStrings()) {
+            if (!options.hasCustomGreetingMessage()) {
+                brandMap.remove("greetingMessage")
+            }
+            if (options.errorMessage == AgentChatControllerOptions.DEFAULTS.errorMessage) {
+                brandMap.remove("errorMessage")
+            }
+            if (options.agentTransferWaitingMessage == AgentChatControllerOptions.DEFAULTS.agentTransferWaitingMessage) {
+                brandMap.remove("agentTransferWaitingMessage")
+            }
+            if (options.agentTransferQueueSizeMessage == AgentChatControllerOptions.DEFAULTS.agentTransferQueueSizeMessage) {
+                brandMap.remove("agentTransferQueueSizeMessage")
+            }
+            if (options.agentTransferQueueNextMessage == AgentChatControllerOptions.DEFAULTS.agentTransferQueueNextMessage) {
+                brandMap.remove("agentTransferQueueNextMessage")
+            }
+            if (options.agentJoinedMessage == AgentChatControllerOptions.DEFAULTS.agentJoinedMessage) {
+                brandMap.remove("agentJoinedMessage")
+            }
+            if (options.agentLeftMessage == AgentChatControllerOptions.DEFAULTS.agentLeftMessage) {
+                brandMap.remove("agentLeftMessage")
+            }
+        }
         val brandJSON = JSONObject(brandMap as Map<*, *>).toString()
 
         urlBuilder.appendQueryParameter("brand", brandJSON)
 
         // Subset of the ChatUiStrings type from chat/ui-strings.ts
-        val chatInterfaceStrings = JSONObject(
-            mapOf(
-                "inputPlaceholder" to options.inputPlaceholder,
-                "disclosure" to (options.disclosure ?: ""),
-                "conversationEndedMessage" to options.conversationEndedMessage,
-                "newChatButtonLabel" to options.newChatButtonLabel,
-                "printTranscriptMenuLabel" to options.saveTranscriptLabel,
-                "endConversationMenuLabel" to options.endConversationLabel,
-            )
-        ).toString()
+        val chatInterfaceStringsMap = mutableMapOf(
+            "inputPlaceholder" to options.inputPlaceholder,
+            "disclosure" to (options.disclosure ?: ""),
+            "conversationEndedMessage" to options.conversationEndedMessage,
+            "newChatButtonLabel" to options.newChatButtonLabel,
+            "printTranscriptMenuLabel" to options.saveTranscriptLabel,
+            "endConversationMenuLabel" to options.endConversationLabel,
+        )
+        if (options.shouldOmitDefaultChatStrings()) {
+            if (options.newChatButtonLabel == AgentChatControllerOptions.DEFAULTS.newChatButtonLabel) {
+                chatInterfaceStringsMap.remove("newChatButtonLabel")
+            }
+            if (options.saveTranscriptLabel == AgentChatControllerOptions.DEFAULTS.saveTranscriptLabel) {
+                chatInterfaceStringsMap.remove("printTranscriptMenuLabel")
+            }
+            if (options.endConversationLabel == AgentChatControllerOptions.DEFAULTS.endConversationLabel) {
+                chatInterfaceStringsMap.remove("endConversationMenuLabel")
+            }
+        }
+        val chatInterfaceStrings = JSONObject(chatInterfaceStringsMap as Map<*, *>).toString()
         urlBuilder.appendQueryParameter("chatInterfaceStrings", chatInterfaceStrings)
 
         if (options.hideTitleBar) {
@@ -583,7 +653,7 @@ class AgentChatFragment : Fragment() {
         // but it now also affects the API, so it's in ConversationOptions. Read it from both places
         // so that old clients don't need to change anything.
         var customGreeting = conversationOptions.customGreeting
-        if (customGreeting == null && options.greetingMessage.isNotEmpty()) {
+        if (customGreeting == null && options.shouldUseGreetingMessageAsCustomGreeting()) {
             customGreeting = options.greetingMessage
         }
 
@@ -628,6 +698,12 @@ class AgentChatFragment : Fragment() {
         }
         if (options.useConfiguredStyle) {
             urlBuilder.appendQueryParameter("useConfiguredStyle", "true")
+        }
+        if (options.autoDetectChatStrings != null) {
+            urlBuilder.appendQueryParameter(
+                "autoDetectChatStrings",
+                options.autoDetectChatStrings.toString()
+            )
         }
         options.textDirection?.let {
             urlBuilder.appendQueryParameter("textDirection", it.value)
