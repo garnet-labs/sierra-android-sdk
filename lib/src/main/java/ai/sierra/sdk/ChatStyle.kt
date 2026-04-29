@@ -16,11 +16,11 @@ data class ChatStyle (
     val typography: ChatStyleTypography? = null
 ): Parcelable {
     internal fun toJSON(): Map<String, Any> {
-        // Match the ChatStyle type from ui/chat/chat.tsx.
+        // Match the web embed's ChatStyle shape.
         val json = mutableMapOf<String, Any>(
             "colors" to colors.toJSON()
         )
-        // Serialize as "type" to match the ChatStyle type from ui/chat/chat.tsx
+        // Serialize as "type" to match the web embed's ChatStyle shape.
         typography?.let {
             json["type"] = it.toJSON()
         }
@@ -94,7 +94,7 @@ data class ChatStyleColors(
     @ColorInt val newChatButton: Int? = null,
 ) : Parcelable {
     internal fun toJSON(): Map<String, String> {
-        // Match the ChatStyle.colors type from ui/chat/chat.tsx.
+        // Match the web embed's ChatStyle.colors shape.
         val colors = mapOf(
             "background" to background,
             "text" to text,

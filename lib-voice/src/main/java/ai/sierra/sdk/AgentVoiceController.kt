@@ -17,6 +17,7 @@ import android.os.Looper
 import android.os.Parcelable
 import android.util.Log
 import android.view.Gravity
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -38,6 +39,7 @@ import java.util.Locale
 public interface VoiceCallbacks {
     public fun onVoiceEnded()
     public fun onVoiceError(error: Throwable)
+    public fun onSessionInfoReceived(conversationID: String, encryptionKey: String?) {}
 }
 
 @Parcelize
@@ -56,6 +58,8 @@ public data class AgentVoiceControllerOptions(
     var voiceStyle: AgentVoiceStyle = AgentVoiceStyle(),
     var voicePlaceholderText: String = "How can I help you today?",
     var locale: String = Locale.getDefault().toLanguageTag(),
+    var voiceConversationID: String? = null,
+    var resumeConversation: Boolean = false,
     var voiceAgentParameters: HashMap<String, String>? = null,
     var disableInterruptions: Boolean = false,
     var allowInsecureLocalConnections: Boolean = false,
@@ -71,6 +75,22 @@ public data class AgentVoiceControllerOptions(
         set(value) {
             voiceAgentParameters = value
         }
+
+    // SDK-internal options
+    //
+    // These are configured by AgentVoiceChatCoordinator. To opt into unified voice/chat flows, use
+    // the coordinator rather than setting these directly.
+    @IgnoredOnParcel
+    internal var resumeReason: AgentVoiceResumeReason? = null
+
+    @IgnoredOnParcel
+    internal var canSwitchToChat: Boolean = false
+
+    @IgnoredOnParcel
+    internal var switchToChatLabel: String = "Continue in chat"
+
+    @IgnoredOnParcel
+    internal var onSwitchToChat: (() -> Unit)? = null
 }
 
 public class AgentVoiceController(
@@ -130,8 +150,8 @@ public class AgentVoiceController(
         connectedFragment?.interrupt()
     }
 
-    public fun endConversation() {
-        connectedFragment?.endConversation()
+    public fun endConversation(closeReason: AgentVoiceCloseReason = AgentVoiceCloseReason.NORMAL) {
+        connectedFragment?.endConversation(closeReason)
     }
 }
 
@@ -159,6 +179,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     private lateinit var errorBanner: TextView
     private lateinit var muteButton: ImageView
     private lateinit var endButton: ImageView
+    private var switchToChatMenuItem: MenuItem? = null
     private val controlButtonSizeDp = 64
     private val controlIconMaxSizeDp = 32
     private val controlButtonSpacingDp = 28
@@ -174,7 +195,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     private var hasShownFirstAttachment = false
     private var hasReceivedInitialGreeting = false
     private var hasShutdownVoiceSession = false
-    private var hasDeliveredVoiceEnded = false
+    private var voiceExitState = VoiceExitState.NONE
     private var rendererFailed = false
     private var lastRenderableAttachmentsSignature: String? = null
     private var isMuted = false
@@ -263,22 +284,25 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         voiceSession?.interrupt()
     }
 
-    internal fun endConversation() {
-        endConversationForExit()
+    internal fun endConversation(closeReason: AgentVoiceCloseReason = AgentVoiceCloseReason.NORMAL) {
+        endConversationForExit(closeReason)
     }
 
-    private fun endConversationForExit() {
-        shutdownVoiceSessionIfNeeded()
+    private fun endConversationForExit(closeReason: AgentVoiceCloseReason = AgentVoiceCloseReason.NORMAL) {
+        shutdownVoiceSessionIfNeeded(closeReason)
         deliverVoiceEndedIfNeeded()
     }
 
     private fun startVoiceSession() {
         val agentParameters = options.voiceAgentParameters ?: hashMapOf()
         hasShutdownVoiceSession = false
-        hasDeliveredVoiceEnded = false
+        voiceExitState = VoiceExitState.NONE
         VoiceSessionService.start(requireContext())
         voiceSession = VoiceSessionManager(
             config = agentConfig,
+            conversationId = options.voiceConversationID,
+            resumeConversation = options.resumeConversation,
+            resumeReason = options.resumeReason,
             disableInterruptions = isDisableInterruptions,
             localeTag = options.locale,
             agentParameters = agentParameters,
@@ -290,12 +314,12 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         updateUIForState(VoiceSessionManager.State.CONNECTING)
     }
 
-    private fun shutdownVoiceSessionIfNeeded() {
+    private fun shutdownVoiceSessionIfNeeded(closeReason: AgentVoiceCloseReason = AgentVoiceCloseReason.NORMAL) {
         if (hasShutdownVoiceSession) {
             return
         }
         hasShutdownVoiceSession = true
-        voiceSession?.disconnect()
+        voiceSession?.disconnect(closeReason = closeReason)
         voiceSession = null
         if (isAdded) {
             VoiceSessionService.stop(requireContext())
@@ -303,11 +327,19 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     }
 
     private fun deliverVoiceEndedIfNeeded() {
-        if (hasDeliveredVoiceEnded) {
+        if (voiceExitState != VoiceExitState.NONE) {
             return
         }
-        hasDeliveredVoiceEnded = true
+        voiceExitState = VoiceExitState.ENDED
         voiceCallbacks?.onVoiceEnded()
+    }
+
+    private fun deliverSwitchToChatIfNeeded() {
+        if (voiceExitState != VoiceExitState.NONE) {
+            return
+        }
+        voiceExitState = VoiceExitState.SWITCHED_TO_CHAT
+        options.onSwitchToChat?.invoke()
     }
 
     private fun createToolbar(): Toolbar {
@@ -318,6 +350,17 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material)
             navigationIcon?.setTint(options.voiceStyle.titleBarTextColor)
             setNavigationOnClickListener { endConversation() }
+            if (options.canSwitchToChat) {
+                switchToChatMenuItem = menu.add(options.switchToChatLabel).apply {
+                    setIcon(R.drawable.sierra_ic_chat_bubble_24)
+                    icon?.setTint(options.voiceStyle.titleBarTextColor)
+                    setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+                    setOnMenuItemClickListener {
+                        switchToChatTapped()
+                        true
+                    }
+                }
+            }
         }
     }
 
@@ -497,38 +540,36 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     private fun updateUIForState(state: VoiceSessionManager.State) {
         when (state) {
             VoiceSessionManager.State.CONNECTING -> {
-                muteButton.isEnabled = true
-                muteButton.alpha = 1f
-                endButton.isEnabled = true
-                endButton.alpha = 1f
+                setControlButtonsEnabled(true)
                 showLoadingState(!hasReceivedInitialGreeting)
                 stopWaveformAnimation()
             }
             VoiceSessionManager.State.LISTENING -> {
                 markInitialGreetingReceivedIfNeeded()
-                muteButton.isEnabled = true
-                muteButton.alpha = 1f
-                endButton.isEnabled = true
-                endButton.alpha = 1f
+                setControlButtonsEnabled(true)
                 stopWaveformAnimation()
             }
             VoiceSessionManager.State.SPEAKING -> {
                 markInitialGreetingReceivedIfNeeded()
-                muteButton.isEnabled = true
-                muteButton.alpha = 1f
-                endButton.isEnabled = true
-                endButton.alpha = 1f
+                setControlButtonsEnabled(true)
                 startWaveformAnimation()
             }
             VoiceSessionManager.State.ENDED -> {
                 markInitialGreetingReceivedIfNeeded()
                 stopWaveformAnimation()
-                muteButton.isEnabled = false
-                muteButton.alpha = 0.5f
-                endButton.isEnabled = false
-                endButton.alpha = 0.5f
+                setControlButtonsEnabled(false)
             }
         }
+    }
+
+    private fun setControlButtonsEnabled(enabled: Boolean) {
+        val alpha = if (enabled) 1f else 0.5f
+        muteButton.isEnabled = enabled
+        muteButton.alpha = alpha
+        endButton.isEnabled = enabled
+        endButton.alpha = alpha
+        switchToChatMenuItem?.isEnabled = enabled
+        switchToChatMenuItem?.icon?.alpha = if (enabled) 255 else 128
     }
 
     private fun showErrorState(message: String) {
@@ -546,10 +587,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         }
 
         loadingIndicator.visibility = View.GONE
-        muteButton.isEnabled = false
-        muteButton.alpha = 0.5f
-        endButton.isEnabled = false
-        endButton.alpha = 0.5f
+        setControlButtonsEnabled(false)
     }
 
     private fun muteTapped() {
@@ -561,6 +599,11 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             voiceSession?.resumeListening()
             muteButton.setImageResource(R.drawable.sierra_ic_mic_24)
         }
+    }
+
+    private fun switchToChatTapped() {
+        shutdownVoiceSessionIfNeeded(AgentVoiceCloseReason.CONTINUE_IN_CHAT)
+        deliverSwitchToChatIfNeeded()
     }
 
     private fun userFacingErrorMessage(): String {
@@ -587,8 +630,9 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
         return false
     }
 
-    override fun onReceiveCredentials(conversationID: String, encryptionKey: String) {
+    override fun onReceiveCredentials(conversationID: String, encryptionKey: String?) {
         Log.d(VOICE_TAG, "Voice credentials received for conversationId=$conversationID")
+        voiceCallbacks?.onSessionInfoReceived(conversationID, encryptionKey)
     }
 
     override fun onReceiveAttachments(attachments: List<Map<String, Any?>>) {
@@ -706,6 +750,12 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             else -> JSONObject.quote(value.toString())
         }
     }
+}
+
+private enum class VoiceExitState {
+    NONE,
+    ENDED,
+    SWITCHED_TO_CHAT,
 }
 
 internal class AgentVoiceViewModel : ViewModel() {

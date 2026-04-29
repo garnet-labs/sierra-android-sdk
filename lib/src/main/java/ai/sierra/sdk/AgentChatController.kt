@@ -291,6 +291,13 @@ data class AgentChatControllerOptions(
     @IgnoredOnParcel
     var conversationEventListener: ConversationEventListener? = null
 
+    // SDK-internal options
+    //
+    // These are configured by SDK coordinators and are not part of the stable public API surface.
+    @SierraInternalApi
+    @IgnoredOnParcel
+    public var onConversationEndedInternal: (() -> Unit)? = null
+
     internal fun hasCustomGreetingMessage(): Boolean {
         return greetingMessage != DEFAULTS.greetingMessage
     }
@@ -331,6 +338,10 @@ class AgentChatController(
 
     internal fun connectToFragment(fragment: AgentChatFragment) {
         this.connectedFragment = fragment
+    }
+
+    internal fun notifyConversationEndedInternal() {
+        options.onConversationEndedInternal?.invoke()
     }
 
     fun printTranscript() {
@@ -570,13 +581,13 @@ class AgentChatFragment : Fragment() {
         lastUiMode = currentUiMode
         val agentConfig = args.agentConfig
         val options = args.options
-        // Turn config and options into query parameters that android.tsx expects.
+        // Turn config and options into query parameters that the Android web embed expects.
         val urlBuilder = Uri.parse(agentConfig.url).buildUpon()
         if (agentConfig.target != null && agentConfig.target.isNotEmpty()) {
             urlBuilder.appendQueryParameter("target", agentConfig.target)
         }
 
-        // Should match the Brand type from bots/useChat.tsx
+        // Should match the web embed's Brand shape.
         val brandMap = mutableMapOf<String, Any>(
             "botName" to options.name,
             "greetingMessage" to options.greetingMessage,
@@ -621,7 +632,7 @@ class AgentChatFragment : Fragment() {
 
         urlBuilder.appendQueryParameter("brand", brandJSON)
 
-        // Subset of the ChatUiStrings type from chat/ui-strings.ts
+        // Subset of the web embed's chat UI strings.
         val chatInterfaceStringsMap = mutableMapOf(
             "inputPlaceholder" to options.inputPlaceholder,
             "disclosure" to (options.disclosure ?: ""),
@@ -976,6 +987,7 @@ private class ChatWebViewInterface(
     @JavascriptInterface
     fun onEndChat() {
         listener?.onConversationEnded()
+        fragment.controller?.notifyConversationEndedInternal()
     }
 
     @JavascriptInterface

@@ -35,16 +35,35 @@ import kotlin.math.max
 import kotlin.math.sqrt
 
 internal interface VoiceSessionDelegate {
-    fun onReceiveCredentials(conversationID: String, encryptionKey: String)
+    fun onReceiveCredentials(conversationID: String, encryptionKey: String?)
     fun onReceiveAttachments(attachments: List<Map<String, Any?>>)
     fun onChangeState(state: VoiceSessionManager.State)
     fun onError(error: Throwable)
     fun onEnd()
 }
 
+public enum class AgentVoiceCloseReason(public val rawValue: String) {
+    ERROR("error"),
+    NORMAL("normal"),
+    TRANSFERRED("transferred"),
+    CONTINUE_IN_CHAT("continue_in_chat"),
+    ;
+
+    // Keep this enum in sync with the SVP ClientCloseReason values.
+}
+
+public enum class AgentVoiceResumeReason(public val rawValue: String) {
+    CONTINUE_IN_VOICE("continue_in_voice"),
+    ;
+
+    // Keep this enum in sync with the SVP ClientResumeReason values.
+}
+
 internal class VoiceSessionManager(
     private val config: AgentConfig,
-    private val conversationId: String = UUID.randomUUID().toString(),
+    conversationId: String? = null,
+    private val resumeConversation: Boolean = false,
+    private val resumeReason: AgentVoiceResumeReason? = null,
     private val disableInterruptions: Boolean = false,
     private val localeTag: String = Locale.getDefault().toLanguageTag(),
     private val agentParameters: Map<String, String> = emptyMap(),
@@ -53,6 +72,8 @@ internal class VoiceSessionManager(
     private val forwardAgentAttachments: Boolean = true,
     private val delegate: VoiceSessionDelegate
 ) {
+    private val conversationId: String = conversationId ?: UUID.randomUUID().toString()
+
     enum class State {
         CONNECTING,
         LISTENING,
@@ -149,7 +170,7 @@ internal class VoiceSessionManager(
             return
         }
         isSystemListeningPaused = true
-        disconnect(reason = reason)
+        disconnect(rawReason = reason)
         mainHandler.post { delegate.onEnd() }
     }
 
@@ -217,7 +238,14 @@ internal class VoiceSessionManager(
         })
     }
 
-    fun disconnect(sendCloseMessage: Boolean = true, reason: String = "normal") {
+    fun disconnect(
+        sendCloseMessage: Boolean = true,
+        closeReason: AgentVoiceCloseReason = AgentVoiceCloseReason.NORMAL
+    ) {
+        disconnect(sendCloseMessage = sendCloseMessage, rawReason = closeReason.rawValue)
+    }
+
+    private fun disconnect(sendCloseMessage: Boolean = true, rawReason: String) {
         isSessionRunning = false
         hasDeliveredSessionInfo = false
         isUserListeningPaused = false
@@ -226,9 +254,9 @@ internal class VoiceSessionManager(
         resetSpeakingGateState()
         stopAudio()
         if (sendCloseMessage) {
-            sendClose(reason)
+            sendClose(rawReason)
         }
-        webSocket?.close(1000, reason)
+        webSocket?.close(1000, rawReason)
         webSocket = null
         state = State.ENDED
     }
@@ -273,6 +301,13 @@ internal class VoiceSessionManager(
             .put("locale", localeTag)
             .put("enableText", enableText)
             .put("forwardAgentAttachments", forwardAgentAttachments)
+            .put("enableSessionInfo", true)
+        if (resumeConversation) {
+            subMsg.put("resumeConversation", true)
+        }
+        resumeReason?.let { reason ->
+            subMsg.put("resumeReason", reason.rawValue)
+        }
         if (agentParameters.isNotEmpty()) {
             subMsg.put("agentParameters", JSONObject(agentParameters))
         }
@@ -337,8 +372,8 @@ internal class VoiceSessionManager(
             }
             "session_info" -> {
                 val convId = subMsg.optString("conversationId")
-                val key = subMsg.optString("encryptionKey")
-                if (!hasDeliveredSessionInfo && convId.isNotEmpty() && key.isNotEmpty()) {
+                val key = subMsg.optString("encryptionKey").takeIf { it.isNotEmpty() }
+                if (!hasDeliveredSessionInfo && convId.isNotEmpty() && key != null) {
                     hasDeliveredSessionInfo = true
                     mainHandler.post { delegate.onReceiveCredentials(convId, key) }
                 }
@@ -368,13 +403,13 @@ internal class VoiceSessionManager(
             }
             "clear" -> clearAudioQueue()
             "end_conversation" -> {
-                sendClose("normal")
+                sendClose(AgentVoiceCloseReason.NORMAL.rawValue)
                 disconnect(sendCloseMessage = false)
                 mainHandler.post { delegate.onEnd() }
             }
             "transfer" -> {
-                sendClose("transferred")
-                disconnect(sendCloseMessage = false, reason = "transferred")
+                sendClose(AgentVoiceCloseReason.TRANSFERRED.rawValue)
+                disconnect(sendCloseMessage = false, closeReason = AgentVoiceCloseReason.TRANSFERRED)
                 mainHandler.post { delegate.onEnd() }
             }
         }

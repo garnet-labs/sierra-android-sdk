@@ -25,8 +25,8 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
- * Shapes posted by `mobile-renderer.tsx` use `attachments` (array). Older bundles may send a single
- * `attachment` with object `data` (mirrors iOS `MobileRendererView` normalization).
+ * Shapes posted by the mobile renderer web bundle use `attachments` (array). Older bundles may send
+ * a single `attachment` with object `data` (mirrors iOS `MobileRendererView` normalization).
  */
 private fun svpClientEventAttachments(json: JSONObject): List<Map<String, Any?>> {
     val arr = json.optJSONArray("attachments")
