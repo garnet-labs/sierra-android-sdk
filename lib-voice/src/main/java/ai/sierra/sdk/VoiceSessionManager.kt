@@ -40,6 +40,7 @@ internal interface VoiceSessionDelegate {
     fun onChangeState(state: VoiceSessionManager.State)
     fun onError(error: Throwable)
     fun onEnd()
+    fun onReceiveResumeToken(token: String) {}
 }
 
 public enum class AgentVoiceCloseReason(public val rawValue: String) {
@@ -64,6 +65,7 @@ internal class VoiceSessionManager(
     conversationId: String? = null,
     private val resumeConversation: Boolean = false,
     private val resumeReason: AgentVoiceResumeReason? = null,
+    resumeToken: String? = null,
     private val disableInterruptions: Boolean = false,
     private val localeTag: String = Locale.getDefault().toLanguageTag(),
     private val agentParameters: Map<String, String> = emptyMap(),
@@ -73,6 +75,7 @@ internal class VoiceSessionManager(
     private val delegate: VoiceSessionDelegate
 ) {
     private val conversationId: String = conversationId ?: UUID.randomUUID().toString()
+    @Volatile private var resumeToken: String? = resumeToken
 
     enum class State {
         CONNECTING,
@@ -128,7 +131,7 @@ internal class VoiceSessionManager(
     private var automaticGainControl: AutomaticGainControl? = null
 
     private val sampleRate = 24000
-    private val compatibilityDate = "2025-10-20"
+    private val compatibilityDate = "2026-04-29"
 
     // Adaptive speaking gate state (mirrors iOS behavior).
     // Accessed from the record thread.
@@ -308,6 +311,9 @@ internal class VoiceSessionManager(
         resumeReason?.let { reason ->
             subMsg.put("resumeReason", reason.rawValue)
         }
+        resumeToken?.let { token ->
+            subMsg.put("resumeToken", token)
+        }
         if (agentParameters.isNotEmpty()) {
             subMsg.put("agentParameters", JSONObject(agentParameters))
         }
@@ -366,6 +372,15 @@ internal class VoiceSessionManager(
         val subMsg = json.optJSONObject("subMsg") ?: JSONObject()
         when (type) {
             "opened" -> {
+                val token = if (subMsg.has("resumeToken") && !subMsg.isNull("resumeToken")) {
+                    subMsg.optString("resumeToken").takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+                if (token != null) {
+                    resumeToken = token
+                    mainHandler.post { delegate.onReceiveResumeToken(token) }
+                }
                 if (setupAudio()) {
                     mainHandler.post { state = State.LISTENING }
                 }

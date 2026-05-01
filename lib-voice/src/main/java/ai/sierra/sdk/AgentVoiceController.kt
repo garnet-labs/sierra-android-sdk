@@ -40,6 +40,7 @@ public interface VoiceCallbacks {
     public fun onVoiceEnded()
     public fun onVoiceError(error: Throwable)
     public fun onSessionInfoReceived(conversationID: String, encryptionKey: String?) {}
+    public fun onResumeTokenReceived(token: String) {}
 }
 
 @Parcelize
@@ -82,6 +83,9 @@ public data class AgentVoiceControllerOptions(
     // the coordinator rather than setting these directly.
     @IgnoredOnParcel
     internal var resumeReason: AgentVoiceResumeReason? = null
+
+    @IgnoredOnParcel
+    internal var resumeToken: String? = null
 
     @IgnoredOnParcel
     internal var canSwitchToChat: Boolean = false
@@ -303,6 +307,7 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
             conversationId = options.voiceConversationID,
             resumeConversation = options.resumeConversation,
             resumeReason = options.resumeReason,
+            resumeToken = options.resumeToken,
             disableInterruptions = isDisableInterruptions,
             localeTag = options.locale,
             agentParameters = agentParameters,
@@ -633,6 +638,10 @@ internal class AgentVoiceFragment : Fragment(), VoiceSessionDelegate, MobileRend
     override fun onReceiveCredentials(conversationID: String, encryptionKey: String?) {
         Log.d(VOICE_TAG, "Voice credentials received for conversationId=$conversationID")
         voiceCallbacks?.onSessionInfoReceived(conversationID, encryptionKey)
+    }
+
+    override fun onReceiveResumeToken(token: String) {
+        voiceCallbacks?.onResumeTokenReceived(token)
     }
 
     override fun onReceiveAttachments(attachments: List<Map<String, Any?>>) {

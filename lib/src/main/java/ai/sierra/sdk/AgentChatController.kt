@@ -985,6 +985,11 @@ private class ChatWebViewInterface(
     }
 
     @JavascriptInterface
+    fun onExternalAgentJoin(externalConversationID: String?, externalAgentID: String?) {
+        listener?.onExternalAgentJoin(externalConversationID, externalAgentID)
+    }
+
+    @JavascriptInterface
     fun onEndChat() {
         listener?.onConversationEnded()
         fragment.controller?.notifyConversationEndedInternal()

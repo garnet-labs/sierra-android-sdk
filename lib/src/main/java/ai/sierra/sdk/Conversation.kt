@@ -70,6 +70,11 @@ interface ConversationEventListener {
     fun onConversationTransfer(transfer: ConversationTransfer) {}
 
     /**
+     * Callback invoked when a non-Sierra agent joins the conversation.
+     */
+    fun onExternalAgentJoin(externalConversationID: String?, externalAgentID: String?) {}
+
+    /**
      * Callback invoked when a conversation starts.
      *
      * @param conversationID The unique identifier for the conversation.
@@ -147,6 +152,12 @@ internal class MainThreadConversationEventListener(private val listener: Convers
     override fun onConversationTransfer(transfer: ConversationTransfer) {
         handler.post {
             listener?.onConversationTransfer(transfer)
+        }
+    }
+
+    override fun onExternalAgentJoin(externalConversationID: String?, externalAgentID: String?) {
+        handler.post {
+            listener?.onExternalAgentJoin(externalConversationID, externalAgentID)
         }
     }
 

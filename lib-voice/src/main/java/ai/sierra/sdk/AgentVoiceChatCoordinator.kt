@@ -47,6 +47,8 @@ public class AgentVoiceChatCoordinator(
         private set
     public var encryptionKey: String? = null
         private set
+    public var voiceResumeToken: String? = null
+        private set
 
     // One-shot handoff latch: set by the voice switch action and consumed by the next
     // makeChatController() call so only the first chat presentation after handoff seeds storage.
@@ -67,6 +69,7 @@ public class AgentVoiceChatCoordinator(
 
         voiceOptions.voiceConversationID = nextVoiceConversationID
         voiceOptions.resumeConversation = shouldResumeConversation
+        voiceOptions.resumeToken = voiceResumeToken
         if (shouldResumeConversation) {
             voiceOptions.resumeReason = AgentVoiceResumeReason.CONTINUE_IN_VOICE
         }
@@ -98,6 +101,7 @@ public class AgentVoiceChatCoordinator(
         voiceConversationID = null
         conversationID = null
         encryptionKey = null
+        voiceResumeToken = null
         pendingContinueInChat.set(false)
         agent.resetConversation()
     }
@@ -114,6 +118,10 @@ public class AgentVoiceChatCoordinator(
     override fun onSessionInfoReceived(conversationID: String, encryptionKey: String?) {
         this.conversationID = conversationID
         this.encryptionKey = encryptionKey
+    }
+
+    override fun onResumeTokenReceived(token: String) {
+        this.voiceResumeToken = token
     }
 
     private fun handleSwitchToChat() {
@@ -133,6 +141,9 @@ public class AgentVoiceChatCoordinator(
         voiceConversationID?.let { id ->
             state.put("voiceConversationID", id)
         }
+        voiceResumeToken?.let { token ->
+            state.put("voiceResumeToken", token)
+        }
         agent.getStorage().setItem(persistedConversationStorageKey(), state.toString())
     }
 
@@ -147,6 +158,9 @@ public class AgentVoiceChatCoordinator(
         encryptionKey = state.optString("encryptionKey").takeIf { it.isNotEmpty() }
         if (voiceConversationID == null) {
             voiceConversationID = state.optString("voiceConversationID").takeIf { it.isNotEmpty() }
+        }
+        if (voiceResumeToken == null) {
+            voiceResumeToken = state.optString("voiceResumeToken").takeIf { it.isNotEmpty() }
         }
     }
 
