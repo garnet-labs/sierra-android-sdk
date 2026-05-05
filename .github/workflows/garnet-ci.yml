@@ -15,7 +15,7 @@ jobs:
         uses: garnet-org/action@v2
         with:
           api_token: ${{ secrets.GARNET_API_TOKEN }}
-          jibril_version: latest
+          jibril_version: v2.10.9
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
